@@ -1,0 +1,18 @@
+[Unit]
+Description=KISS / AX.25 traffic web UI
+Documentation=https://github.com/m0lte/kiss-collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/kisscollector
+Environment=KISS_DB_DIR=/var/lib/kisscollector
+Environment=WEB_PORT=8080
+ExecStart=/usr/bin/python3 /opt/kisscollector/webui.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

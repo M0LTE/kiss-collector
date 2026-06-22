@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""kiss-collector MCP server - ask questions about captured AX.25/packet-radio
+traffic. Exposes query tools over the per-host SQLite databases via the Model
+Context Protocol (streamable-HTTP transport).
+
+Add to an MCP client as:  http://<host>:8765/mcp
+"""
+
+import os
+
+from mcp.server.fastmcp import FastMCP
+
+import kisslib
+
+mcp = FastMCP(
+    "kiss-collector",
+    host=os.environ.get("MCP_HOST", "0.0.0.0"),
+    port=int(os.environ.get("MCP_PORT", "8765")),
+)
+
+
+def _slim(d):
+    return {"time": d["ts_utc"], "from": d["from"], "to": d["to"],
+            "via": d["via"], "band": d["band"], "host": d["host"],
+            "dir": "TX" if d["direction"] == "toModem" else "RX",
+            "type": d["type"], "len": d["len"], "info": d["info"],
+            "frame_type": d["frame_type"], "tx_time_ms": d["tx_time_ms"]}
+
+
+@mcp.tool()
+def overview() -> dict:
+    """Orientation: which hosts/bands/directions/frame-types exist, the total
+    frame count, and the earliest/latest capture times. Call this first."""
+    return kisslib.overview()
+
+
+@mcp.tool()
+def search_traffic(callsign: str = "", station_from: str = "",
+                   station_to: str = "", band: str = "", direction: str = "",
+                   frame_type: str = "", since: str = "", until: str = "",
+                   contains: str = "", limit: int = 100) -> list:
+    """Search decoded AX.25 frames, newest first.
+
+    callsign     - match this call in source, destination OR digipeater path
+    station_from - match only the source (from) callsign
+    station_to   - match only the destination (to) callsign
+    band         - e.g. '2m', '40m', '70cm'
+    direction    - 'RX'/'fromModem' (received) or 'TX'/'toModem' (transmitted)
+    frame_type   - e.g. 'DataFrameKissCmd'
+    since/until  - time bounds: ISO ('2026-06-22 20:00'), epoch, or relative
+                   shorthand like '30m','6h','7d'
+    contains     - free-text substring match over callsigns, info text and hex
+    limit        - max rows (default 100)
+
+    Returns rows with time, from, to, via, band, dir, type, info and (for TX
+    frames) tx_time_ms (kissproxy ACKMODE queue-to-ack time)."""
+    f = {"band": band or None, "direction": kisslib.norm_direction(direction),
+         "frame_type": frame_type or None, "callsign": callsign or None,
+         "q": contains or None, "from_ts": kisslib.parse_when(since),
+         "to_ts": kisslib.parse_when(until)}
+    res = kisslib.search(f, limit=min(int(limit), 1000))
+    if station_from:
+        res = [d for d in res if station_from.upper() in d["from"].upper()]
+    if station_to:
+        res = [d for d in res if station_to.upper() in d["to"].upper()]
+    return [_slim(d) for d in res]
+
+
+@mcp.tool()
+def top_talkers(by: str = "from", band: str = "", direction: str = "",
+                since: str = "", until: str = "", limit: int = 20) -> list:
+    """Most active callsigns. by='from' (sources) or 'to' (destinations).
+    Optionally scope by band/direction/time. Returns [{call, count}]."""
+    f = {"band": band or None, "direction": kisslib.norm_direction(direction),
+         "from_ts": kisslib.parse_when(since), "to_ts": kisslib.parse_when(until)}
+    return kisslib.top_talkers(f, by=("to" if by == "to" else "from"),
+                               limit=min(int(limit), 100))
+
+
+@mcp.tool()
+def activity(bucket: str = "hour", band: str = "", direction: str = "",
+             since: str = "", until: str = "") -> list:
+    """Frame counts over time. bucket='hour' or 'day'. Returns
+    [{bucket, frames}] in chronological order."""
+    f = {"band": band or None, "direction": kisslib.norm_direction(direction),
+         "from_ts": kisslib.parse_when(since), "to_ts": kisslib.parse_when(until)}
+    return kisslib.activity(f, bucket=("day" if bucket == "day" else "hour"))
+
+
+@mcp.tool()
+def stats(band: str = "", since: str = "", until: str = "") -> dict:
+    """Per-band summary (frames, bytes, first/last heard), frame-type and
+    direction counts, and top source/destination callsigns."""
+    f = {"band": band or None, "from_ts": kisslib.parse_when(since),
+         "to_ts": kisslib.parse_when(until)}
+    return kisslib.stats(f)
+
+
+@mcp.tool()
+def run_sql(sql: str) -> dict:
+    """Run ONE read-only SQL SELECT/WITH query over a unified view spanning all
+    per-host databases. Use for aggregate questions SQL can answer directly
+    (callsigns are NOT columns - decode-based questions use search_traffic).
+
+    Tables/views:
+      frames(id, ts_unix REAL, ts_utc TEXT, host, band, direction
+             ['fromModem'|'toModem'], port, frame_type, topic, payload BLOB,
+             payload_len)
+      ack_timing(id, ts_unix, ts_utc, host, band, seq, payload_bytes, mode,
+             mode_name, bit_rate, txdelay_ms, tx_duration_ms, total_ms,
+             queued_utc, tx_start_utc, tx_end_utc, raw)
+
+    ts_unix is epoch seconds; use strftime('%Y-%m-%d %H:00', ts_unix,'unixepoch')
+    to bucket by time. Payload blobs are returned hex-encoded. Max 500 rows."""
+    return kisslib.run_sql(sql)
+
+
+if __name__ == "__main__":
+    mcp.run(transport="streamable-http")

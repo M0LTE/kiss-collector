@@ -1,0 +1,20 @@
+[Unit]
+Description=KISS proxy MQTT to per-host SQLite collector
+Documentation=https://github.com/m0lte/kiss-collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/kisscollector
+Environment=MQTT_HOST=mqtt.lan
+Environment=MQTT_PORT=1883
+Environment=MQTT_TOPIC=kissproxy/#
+Environment=KISS_DB_DIR=/var/lib/kisscollector
+ExecStart=/usr/bin/python3 /opt/kisscollector/collector.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

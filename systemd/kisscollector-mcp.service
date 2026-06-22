@@ -1,0 +1,19 @@
+[Unit]
+Description=KISS / AX.25 traffic MCP server
+Documentation=https://github.com/m0lte/kiss-collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/kisscollector
+Environment=KISS_DB_DIR=/var/lib/kisscollector
+Environment=MCP_HOST=0.0.0.0
+Environment=MCP_PORT=8765
+ExecStart=/opt/kisscollector/venv/bin/python /opt/kisscollector/mcpserver.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
