@@ -107,8 +107,41 @@ then ask questions like *"who did GB7RDG talk to in the last hour?"* or
 - `stats(...)` – per-band summary and top talkers
 - `run_sql(sql)` – read-only SQL over a unified view of all hosts' data
 
-There is no authentication — run it on a trusted LAN, or put it behind a
-reverse proxy / firewall.
+### Authentication
+
+By default the server is unauthenticated (fine on a trusted LAN). To require a
+token, create `/etc/kisscollector-mcp.env`:
+
+```
+MCP_TOKEN=your-long-random-secret
+```
+
+and restart `kisscollector-mcp`. Clients must then send
+`Authorization: Bearer your-long-random-secret` (or append `?token=...` to the
+URL for clients that can't set headers). Requests without it get `401`.
+
+### External access (Tailscale Funnel)
+
+To reach it from outside the LAN without opening router ports, run Tailscale in
+the container (userspace mode works in an unprivileged LXC) and expose the
+server with [Funnel](https://tailscale.com/kb/1223/funnel) — free, with an
+automatic HTTPS certificate:
+
+```bash
+tailscale up
+tailscale funnel --bg 8765
+# -> https://<node>.<tailnet>.ts.net/mcp
+```
+
+**Always set `MCP_TOKEN` before enabling Funnel** — Funnel is public internet.
+
+Add to Claude Code with:
+
+```bash
+claude mcp add --transport http kiss-collector \
+  https://<node>.<tailnet>.ts.net/mcp \
+  --header "Authorization: Bearer <token>"
+```
 
 ## Layout
 

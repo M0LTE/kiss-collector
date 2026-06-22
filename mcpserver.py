@@ -115,5 +115,40 @@ def run_sql(sql: str) -> dict:
     return kisslib.run_sql(sql)
 
 
+class TokenAuth:
+    """ASGI middleware requiring a bearer token (or ?token=) on HTTP requests.
+    Enabled when MCP_TOKEN is set; lifespan/other scopes pass through."""
+
+    def __init__(self, app, token):
+        self.app = app
+        self.expected = "Bearer " + token
+        self.token = token
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            headers = dict(scope.get("headers") or [])
+            auth = headers.get(b"authorization", b"").decode()
+            qs = scope.get("query_string", b"").decode()
+            qtok = ""
+            for part in qs.split("&"):
+                if part.startswith("token="):
+                    qtok = part[6:]
+            if auth != self.expected and qtok != self.token:
+                await send({"type": "http.response.start", "status": 401,
+                            "headers": [(b"content-type", b"text/plain"),
+                                        (b"www-authenticate", b"Bearer")]})
+                await send({"type": "http.response.body", "body": b"unauthorized\n"})
+                return
+        await self.app(scope, receive, send)
+
+
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http")
+    token = os.environ.get("MCP_TOKEN", "").strip()
+    if token:
+        import uvicorn
+        app = TokenAuth(mcp.streamable_http_app(), token)
+        uvicorn.run(app, host=mcp.settings.host, port=mcp.settings.port,
+                    log_level="warning")
+    else:
+        # no token configured -> run unauthenticated (LAN use)
+        mcp.run(transport="streamable-http")

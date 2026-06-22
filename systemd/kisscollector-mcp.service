@@ -10,6 +10,9 @@ WorkingDirectory=/opt/kisscollector
 Environment=KISS_DB_DIR=/var/lib/kisscollector
 Environment=MCP_HOST=0.0.0.0
 Environment=MCP_PORT=8765
+# Optional secret: create /etc/kisscollector-mcp.env with MCP_TOKEN=... to
+# require  Authorization: Bearer <token>  (recommended if exposed publicly).
+EnvironmentFile=-/etc/kisscollector-mcp.env
 ExecStart=/opt/kisscollector/venv/bin/python /opt/kisscollector/mcpserver.py
 Restart=always
 RestartSec=5
