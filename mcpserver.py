@@ -36,6 +36,11 @@ mcp = FastMCP(
     instructions=INSTRUCTIONS,
     host=os.environ.get("MCP_HOST", "0.0.0.0"),
     port=int(os.environ.get("MCP_PORT", "8765")),
+    # Stateless + plain-JSON responses: each request is self-contained (no
+    # session affinity or SSE stream needed). Robust behind connectors / proxies
+    # like claude.ai + Tailscale Funnel, which open a new session per request.
+    stateless_http=True,
+    json_response=True,
 )
 
 
