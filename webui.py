@@ -30,6 +30,12 @@ def api_stats():
     return jsonify(kisslib.stats(request.args))
 
 
+@app.route("/api/params")
+def api_params():
+    limit = min(int(request.args.get("limit", 500)), 5000)
+    return jsonify(kisslib.params(request.args, limit=limit))
+
+
 @app.route("/export.pcap")
 def export_pcap():
     # PCAP: LINKTYPE_AX25 (3), magic a1b2c3d4, little-endian
@@ -99,7 +105,8 @@ PAGE = r"""<!doctype html>
  .pill{font-size:10px;padding:1px 6px;border-radius:9px;background:#222835;color:#aab3c2}
  .new{animation:fl 1.2s ease-out}@keyframes fl{from{background:#1f6feb55}to{background:transparent}}
  #wrap{flex:1;min-height:0;overflow:auto}
- #statspanel{flex:1;min-height:0;overflow:auto;padding:0 12px 16px}
+ #statspanel,#paramspanel{flex:1;min-height:0;overflow:auto;padding:0 12px 16px}
+ #paramspanel h2{font-size:14px;margin:14px 0 6px}
  #bar{padding:5px 12px;font-size:11px;color:#9aa4b2;background:#11141a;border-bottom:1px solid #20242d}
  .ex{padding:8px 12px;background:#171b22;border-bottom:1px solid #2a2f3a;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 </style></head><body>
@@ -115,6 +122,7 @@ PAGE = r"""<!doctype html>
  <button id="apply">Apply</button>
  <button id="live" class="sec">Live: on</button>
  <button id="statsbtn" class="sec">Stats</button>
+ <button id="paramsbtn" class="sec">Params</button>
 </header>
 <div class="ex">
  <strong style="font-size:12px">PCAP export</strong>
@@ -129,9 +137,10 @@ PAGE = r"""<!doctype html>
  <th>Dir</th><th>Type</th><th>Len</th><th>Tx time</th>
 </tr></thead><tbody id="tb"></tbody></table></div>
 <div id="statspanel" style="display:none"></div>
+<div id="paramspanel" style="display:none"></div>
 <script>
 const $=id=>document.getElementById(id);
-let live=true, latest=0, seen=new Set(), showStats=false;
+let live=true, latest=0, seen=new Set(), view='live';
 const F=()=>({host:$('host').value,band:$('band').value,direction:$('direction').value,
  port:$('port').value,frame_type:$('frame_type').value,callsign:$('callsign').value.trim(),
  q:$('q').value.trim()});
@@ -181,7 +190,7 @@ async function reload(){
  add(await r.json(),false);
 }
 async function poll(){
- if(showStats)return;
+ if(view!=='live')return;
  if(live&&latest){
    const r=await fetch('/api/frames?since_ts='+latest+'&'+qs(F()));
    const j=await r.json(); if(j.length)add(j,true);
@@ -208,13 +217,26 @@ async function loadStats(){
    <div><h2>Top sources (from)</h2><table><tbody>${tf}</tbody></table></div>
    <div><h2>Top destinations (to)</h2><table><tbody>${tt}</tbody></table></div></div>`;
 }
-function setStats(on){
- showStats=on;$('statsbtn').textContent=on?'Live view':'Stats';
- $('wrap').style.display=on?'none':'';$('bar').style.display=on?'none':'';
- $('statspanel').style.display=on?'':'none';if(on)loadStats();
+async function loadParams(){
+ const r=await(await fetch('/api/params?limit=500&'+qs(F()))).json();
+ const rows=r.map(d=>`<tr><td class=mono>${d.time}</td><td class=mono>${d.host}</td><td>${d.band}</td><td>${d.port}</td><td class="dir ${d.direction}">${d.direction}</td><td><b>${d.param}</b></td><td>${esc(d.formatted)}</td></tr>`).join('')||'<tr><td colspan=7>no modem parameters recorded</td></tr>';
+ $('paramspanel').innerHTML=`<h2>Modem parameters &mdash; sent host &rarr; modem</h2>
+  <table><thead><tr><th>UTC time</th><th>Host</th><th>Band</th><th>Port</th><th>Dir</th><th>Param</th><th>Value</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
-$('statsbtn').onclick=()=>setStats(!showStats);
-$('apply').onclick=()=>{showStats?loadStats():reload();};
+function setView(v){
+ view=(view===v&&v!=='live')?'live':v;
+ $('wrap').style.display=view==='live'?'':'none';
+ $('bar').style.display=view==='live'?'':'none';
+ $('statspanel').style.display=view==='stats'?'':'none';
+ $('paramspanel').style.display=view==='params'?'':'none';
+ $('statsbtn').textContent=view==='stats'?'Live view':'Stats';
+ $('paramsbtn').textContent=view==='params'?'Live view':'Params';
+ if(view==='stats')loadStats();
+ if(view==='params')loadParams();
+}
+$('statsbtn').onclick=()=>setView('stats');
+$('paramsbtn').onclick=()=>setView('params');
+$('apply').onclick=()=>{view==='stats'?loadStats():view==='params'?loadParams():reload();};
 $('live').onclick=()=>{live=!live;$('live').textContent='Live: '+(live?'on':'off');};
 ['callsign','q'].forEach(id=>$(id).addEventListener('keydown',e=>{if(e.key==='Enter')reload();}));
 $('pexp').onclick=()=>{
