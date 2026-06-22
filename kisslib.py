@@ -199,7 +199,8 @@ def query_frames(f, limit=200, order="DESC"):
         try:
             con = connect(path)
             sql = ("SELECT id, ts_unix, ts_utc, band, direction, port, "
-                   "frame_type, payload FROM frames" + where +
+                   "frame_type, payload, tx_time_ms, tx_duration_ms "
+                   "FROM frames" + where +
                    " ORDER BY ts_unix " + order + " LIMIT ?")
             for r in con.execute(sql, params + [limit]):
                 rows.append((host, r))
@@ -211,13 +212,14 @@ def query_frames(f, limit=200, order="DESC"):
 
 
 def row_to_dict(host, r):
-    (rid, ts_unix, ts_utc, band, direction, port, frame_type, payload) = r
+    (rid, ts_unix, ts_utc, band, direction, port, frame_type, payload,
+     tx_time_ms, tx_duration_ms) = r
     payload = bytes(payload or b"")
     d = {"uid": "%s:%d" % (host, rid), "host": host, "ts_unix": ts_unix,
          "ts_utc": ts_utc, "band": band, "direction": direction, "port": port,
          "frame_type": frame_type, "len": len(payload), "hex": payload.hex(),
          "from": "", "to": "", "via": "", "type": "", "info": "",
-         "tx_time_ms": None, "tx_duration_ms": None}
+         "tx_time_ms": tx_time_ms, "tx_duration_ms": tx_duration_ms}
     dec = decode_frame(payload, frame_type)
     if dec:
         d["from"] = dec["from"]
@@ -245,51 +247,9 @@ def matches_text(d, callsign, q):
     return True
 
 
-def attach_tx_times(frames):
-    """For outbound (toModem) frames, attach kissproxy's ACKMODE tx timing."""
-    tx = [d for d in frames if d["direction"] == "toModem"]
-    if not tx:
-        return
-    by_host = {}
-    for d in tx:
-        by_host.setdefault(d["host"], []).append(d)
-    for host, ds in by_host.items():
-        path = os.path.join(DB_DIR, host + ".db")
-        if not os.path.exists(path):
-            continue
-        lo = min(d["ts_unix"] for d in ds) - 30
-        hi = max(d["ts_unix"] for d in ds) + 30
-        timings = []
-        try:
-            con = connect(path)
-            for band, total_ms, txdur, queued, ts_unix in con.execute(
-                    "SELECT band,total_ms,tx_duration_ms,queued_utc,ts_unix "
-                    "FROM ack_timing WHERE ts_unix BETWEEN ? AND ?", (lo, hi)):
-                qe = parse_utc(queued)
-                if qe is None and total_ms is not None:
-                    qe = ts_unix - total_ms / 1000.0
-                timings.append({"band": band, "total_ms": total_ms,
-                                "txdur": txdur, "queued": qe or ts_unix})
-            con.close()
-        except sqlite3.Error:
-            continue
-        for d in ds:
-            best, gap = None, 5.0
-            for t in timings:
-                if t["band"] != d["band"]:
-                    continue
-                g = abs(t["queued"] - d["ts_unix"])
-                if g < gap:
-                    best, gap = t, g
-            if best:
-                d["tx_time_ms"] = (round(best["total_ms"], 1)
-                                   if best["total_ms"] is not None else None)
-                d["tx_duration_ms"] = (round(best["txdur"], 1)
-                                       if best["txdur"] is not None else None)
-
-
 def search(f, limit=200, order="DESC"):
-    """Decoded, ack-hidden, tx-time-attached frame list matching filters f."""
+    """Decoded, ack-hidden frame list matching filters f. The tx time is stored
+    on the frame row by the collector (no query-time correlation)."""
     callsign = (f.get("callsign") or "").strip()
     q = (f.get("q") or "").strip()
     rows = query_frames(f, limit=limit if not (callsign or q) else 5000,
@@ -303,7 +263,6 @@ def search(f, limit=200, order="DESC"):
             out.append(d)
     if order == "DESC":
         out = out[:limit]
-    attach_tx_times(out)
     return out
 
 
@@ -478,7 +437,8 @@ def _unified_conn():
             "CASE direction WHEN 'toModem' THEN 'TX' "
             "WHEN 'fromModem' THEN 'RX' ELSE direction END AS direction, "
             "port, replace(frame_type, 'KissCmd', '') AS frame_type, "
-            "topic, payload, payload_len FROM %s.frames" % sch)
+            "topic, payload, payload_len, seq, tx_time_ms, tx_duration_ms "
+            "FROM %s.frames" % sch)
         av.append("SELECT * FROM %s.ack_timing" % sch)
     if fv:
         con.execute("CREATE TEMP VIEW frames AS " + " UNION ALL ".join(fv))

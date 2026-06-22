@@ -44,7 +44,8 @@ def export_pcap():
         yield struct.pack("<IHHIIII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, 3)
         rows = kisslib.query_frames(args, limit=1000000, order="ASC")
         for host, r in rows:
-            (_id, ts_unix, _u, _b, _dir, _p, frame_type, payload) = r
+            (_id, ts_unix, _u, _b, _dir, _p, frame_type, payload,
+             _tt, _td) = r
             if frame_type not in ftypes:
                 continue
             payload = bytes(payload or b"")

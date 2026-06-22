@@ -59,9 +59,10 @@ stripped before AX.25 decoding.
 
 When transmitting in acknowledged KISS mode, kissproxy also publishes timing to
 `kissproxy/<host>/<band>/timing/ackmode` (JSON: sequence, queued/ack times,
-airtime, total time). The collector stores these in an `ack_timing` table, and
-the web UI / MCP server attach the **tx time** (queue-to-ack) to the matching
-outbound frame, hiding the bare ACK frames.
+airtime, total time). When the receipt arrives the collector stamps the **tx
+time** (queue-to-ack) and airtime directly onto the originating outbound frame
+(matched by KISS sequence number), and keeps the full detail in an `ack_timing`
+table. The web UI / MCP hide the bare ACK frames.
 
 ## Install
 

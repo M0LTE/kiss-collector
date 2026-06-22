@@ -20,6 +20,7 @@ emitAsBase64String=false, published at QoS 2).
 
 import os
 import re
+import glob
 import json
 import sqlite3
 import threading
@@ -60,11 +61,15 @@ CREATE TABLE IF NOT EXISTS frames (
     frame_type  TEXT    NOT NULL,
     topic       TEXT    NOT NULL,
     payload     BLOB,
-    payload_len INTEGER NOT NULL
+    payload_len INTEGER NOT NULL,
+    seq            INTEGER,   -- KISS sequence number (AckMode frames only)
+    tx_time_ms     REAL,      -- ACKMODE queue-to-ack time, filled on receipt
+    tx_duration_ms REAL       -- ACKMODE on-air time (airtime)
 );
 CREATE INDEX IF NOT EXISTS idx_frames_ts       ON frames(ts_unix);
 CREATE INDEX IF NOT EXISTS idx_frames_band_dir ON frames(band, direction);
 CREATE INDEX IF NOT EXISTS idx_frames_type     ON frames(frame_type);
+CREATE INDEX IF NOT EXISTS idx_frames_seq      ON frames(seq);
 
 -- kissproxy's own ACKMODE transmit-timing, published to
 -- kissproxy/<host>/<band>/timing/ackmode as JSON. Used to attach a tx time
@@ -102,11 +107,33 @@ def get_conn(host):
         conn = sqlite3.connect(path, check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
+        # Add columns to a pre-existing frames table BEFORE executescript runs,
+        # so its indexes (e.g. on seq) don't reference a not-yet-added column.
+        # On a fresh DB the table doesn't exist yet -> OperationalError, ignored
+        # (executescript then creates it complete); on a current DB -> duplicate
+        # column, ignored.
+        for col, typ in (("seq", "INTEGER"), ("tx_time_ms", "REAL"),
+                         ("tx_duration_ms", "REAL")):
+            try:
+                conn.execute("ALTER TABLE frames ADD COLUMN %s %s" % (col, typ))
+            except sqlite3.OperationalError:
+                pass
         conn.executescript(SCHEMA)
         conn.commit()
         _conns[safe] = conn
         log.info("opened database %s", path)
     return conn
+
+
+def migrate_existing():
+    """Open every existing DB at startup so schema migrations are applied
+    before readers (web UI / MCP) query the new columns."""
+    for path in sorted(glob.glob(os.path.join(DB_DIR, "*.db"))):
+        host = os.path.basename(path)[:-3]
+        try:
+            get_conn(host)
+        except Exception:
+            log.exception("startup migration failed for %s", path)
 
 
 def on_connect(client, userdata, flags, rc, *args):
@@ -130,14 +157,18 @@ def store_frame(parts, payload):
     _, host, band, direction, _framing, port, frame_type = parts
     now = time.time()
     iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+    # AckMode frames carry a 2-byte sequence prefix; capture it for correlation
+    seq = None
+    if "AckMode" in frame_type and len(payload) >= 2:
+        seq = (payload[0] << 8) | payload[1]
     with _lock:
         conn = get_conn(host)
         conn.execute(
             "INSERT INTO frames (ts_unix, ts_utc, host, band, direction, "
-            "port, frame_type, topic, payload, payload_len) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "port, frame_type, topic, payload, payload_len, seq) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (now, iso, host, band, direction, port, frame_type,
-             "/".join(parts), sqlite3.Binary(payload), len(payload)),
+             "/".join(parts), sqlite3.Binary(payload), len(payload), seq),
         )
         conn.commit()
     _stats["stored"] += 1
@@ -154,6 +185,10 @@ def store_timing(parts, payload):
         return
     now = time.time()
     iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+    seq = j.get("seqNumber")
+    total = j.get("totalMs")
+    dur = j.get("txDurationMs")
+    matched = 0
     with _lock:
         conn = get_conn(host)
         conn.execute(
@@ -161,16 +196,27 @@ def store_timing(parts, payload):
             "payload_bytes, mode, mode_name, bit_rate, txdelay_ms, "
             "tx_duration_ms, total_ms, queued_utc, tx_start_utc, tx_end_utc, raw) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (now, iso, host, band, j.get("seqNumber"), j.get("payloadBytes"),
+            (now, iso, host, band, seq, j.get("payloadBytes"),
              j.get("mode"), j.get("modeName"), j.get("bitRate"),
-             j.get("txDelayMs"), j.get("txDurationMs"), j.get("totalMs"),
+             j.get("txDelayMs"), dur, total,
              j.get("queuedUtc"), j.get("txStartUtc"), j.get("txEndUtc"),
              payload.decode("utf-8", "replace")),
         )
+        # stamp the tx time onto the originating outbound frame (newest
+        # unstamped toModem frame on this band with the same sequence number)
+        if seq is not None:
+            cur = conn.execute(
+                "UPDATE frames SET tx_time_ms=?, tx_duration_ms=? WHERE id=("
+                "SELECT id FROM frames WHERE band=? AND direction='toModem' "
+                "AND seq=? AND tx_time_ms IS NULL ORDER BY ts_unix DESC LIMIT 1)",
+                (round(total, 1) if total is not None else None,
+                 round(dur, 1) if dur is not None else None, band, seq),
+            )
+            matched = cur.rowcount
         conn.commit()
     _stats["stored"] += 1
-    log.info("ackmode timing seq=%s total=%sms band=%s",
-             j.get("seqNumber"), j.get("totalMs"), band)
+    log.info("ackmode timing seq=%s total=%sms band=%s (frame %s)",
+             seq, total, band, "stamped" if matched else "unmatched")
     _heartbeat(now)
 
 
@@ -203,6 +249,7 @@ def main():
     client.on_message = on_message
     client.reconnect_delay_set(min_delay=1, max_delay=30)
     log.info("kisscollector starting; db dir=%s", DB_DIR)
+    migrate_existing()
     while True:
         try:
             client.connect(MQTT_HOST, MQTT_PORT, keepalive=30)
