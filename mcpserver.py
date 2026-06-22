@@ -166,6 +166,19 @@ def tx_timing(band: str = "", since: str = "", until: str = "",
 
 
 @mcp.tool()
+def modem_params(param: str = "", band: str = "", since: str = "",
+                 until: str = "", limit: int = 100) -> list:
+    """Ledger of modem parameter / control commands the host sent to the modem
+    (TxDelay, Persistence, SlotTime, TxTail, FullDuplex, SetHardware, Return).
+    These are configuration commands, NOT over-the-air traffic. Each record has
+    the parameter name, raw `value`, a human-readable `formatted` value, plus
+    time/band/direction. Filter by param/band/time. Newest first."""
+    f = {"param": param or None, "band": band or None,
+         "from_ts": kisslib.parse_when(since), "to_ts": kisslib.parse_when(until)}
+    return kisslib.params(f, limit=min(int(limit), 1000))
+
+
+@mcp.tool()
 def run_sql(sql: str) -> dict:
     """Run ONE read-only SQL SELECT/WITH query over a unified view spanning all
     per-host databases. Use for aggregate questions SQL can answer directly
@@ -173,8 +186,10 @@ def run_sql(sql: str) -> dict:
 
     Tables/views:
       frames(id, ts_unix REAL, ts_utc TEXT, host, band, direction ['RX'|'TX'],
-             port, frame_type [native, e.g. 'DataFrame'], topic, payload BLOB,
-             payload_len)
+             port, frame_type [native, e.g. 'DataFrame'; data traffic only],
+             topic, payload BLOB, payload_len, seq, tx_time_ms, tx_duration_ms)
+      modem_params(id, ts_unix, ts_utc, host, band, direction, port,
+             param [e.g. 'TxDelay'], value, raw_hex)  -- host->modem config cmds
       ack_timing(id, ts_unix, ts_utc, host, band, seq, payload_bytes, mode,
              mode_name, bit_rate, txdelay_ms, tx_duration_ms [airtime],
              total_ms [queue-to-ack], queued_utc, tx_start_utc, tx_end_utc, raw)

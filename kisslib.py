@@ -152,6 +152,21 @@ def denorm_frame_type(name):
     return name if name.endswith("KissCmd") else name + "KissCmd"
 
 
+def format_param(param, value, raw_hex=None):
+    """Human-readable KISS parameter value (per the KISS TNC protocol)."""
+    if value is None:
+        return raw_hex or ""
+    if param in ("TxDelay", "SlotTime", "TxTail"):
+        return "%d (%d ms)" % (value, value * 10)
+    if param == "Persistence":
+        return "%d (p=%.3f)" % (value, (value + 1) / 256.0)
+    if param == "FullDuplex":
+        return "full duplex" if value else "half duplex"
+    if param == "SetHardware":
+        return raw_hex or str(value)
+    return str(value)
+
+
 # ----------------------------------------------------------------- DB access
 
 def host_dbs():
@@ -425,9 +440,49 @@ def tx_timing(f, limit=200):
     return out[:limit]
 
 
+def params(f, limit=200):
+    """Modem parameter/control commands ledger, newest first.
+    Filterable by host/band/param/time."""
+    clauses, p = [], []
+    if f.get("band"):
+        clauses.append("band = ?")
+        p.append(f["band"])
+    if f.get("param"):
+        clauses.append("param = ?")
+        p.append(f["param"])
+    if f.get("from_ts"):
+        clauses.append("ts_unix >= ?")
+        p.append(float(f["from_ts"]))
+    if f.get("to_ts"):
+        clauses.append("ts_unix <= ?")
+        p.append(float(f["to_ts"]))
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    out = []
+    for path in host_dbs():
+        host = host_name(path)
+        if f.get("host") and host != f["host"]:
+            continue
+        try:
+            con = connect(path)
+            for ts_utc, band, direction, port, param, value, raw_hex in con.execute(
+                    "SELECT ts_utc, band, direction, port, param, value, raw_hex "
+                    "FROM modem_params" + where +
+                    " ORDER BY ts_unix DESC LIMIT ?", p + [limit]):
+                out.append({"time": ts_utc, "host": host, "band": band,
+                            "direction": dir_label(direction), "port": port,
+                            "param": param, "value": value,
+                            "formatted": format_param(param, value, raw_hex),
+                            "raw_hex": raw_hex})
+            con.close()
+        except sqlite3.Error:
+            continue
+    out.sort(key=lambda x: x["time"], reverse=True)
+    return out[:limit]
+
+
 def _unified_conn():
     con = sqlite3.connect(":memory:")
-    fv, av = [], []
+    fv, av, mv = [], [], []
     for i, path in enumerate(host_dbs()):
         sch = "h%d" % i
         con.execute("ATTACH DATABASE ? AS %s" % sch, (path,))
@@ -440,9 +495,15 @@ def _unified_conn():
             "topic, payload, payload_len, seq, tx_time_ms, tx_duration_ms "
             "FROM %s.frames" % sch)
         av.append("SELECT * FROM %s.ack_timing" % sch)
+        mv.append(
+            "SELECT id, ts_unix, ts_utc, host, band, "
+            "CASE direction WHEN 'toModem' THEN 'TX' "
+            "WHEN 'fromModem' THEN 'RX' ELSE direction END AS direction, "
+            "port, param, value, raw_hex FROM %s.modem_params" % sch)
     if fv:
         con.execute("CREATE TEMP VIEW frames AS " + " UNION ALL ".join(fv))
         con.execute("CREATE TEMP VIEW ack_timing AS " + " UNION ALL ".join(av))
+        con.execute("CREATE TEMP VIEW modem_params AS " + " UNION ALL ".join(mv))
     return con
 
 

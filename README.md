@@ -52,8 +52,12 @@ The last topic level is `<KissCommandCode>KissCmd`:
 | `AckModeKissCmd` | 0x0C | acknowledged (multi-drop) KISS — carries a 2-byte sequence |
 | `ReturnKissCmd` | 0xFF | exit KISS mode |
 
-All types are stored. AckMode frames carry a 2-byte sequence prefix that is
-stripped before AX.25 decoding.
+Data frames (`DataFrame`, `AckMode`) are stored as traffic in the `frames`
+table. The modem parameter / control commands the host sends to the modem
+(`TxDelay`, `Persistence`, `SlotTime`, `TxTail`, `FullDuplex`, `SetHardware`,
+`Return`) are kept separately in a `modem_params` ledger rather than mixed in
+with traffic. AckMode frames carry a 2-byte sequence prefix that is stripped
+before AX.25 decoding.
 
 ### ACKMODE transmit timing
 
@@ -107,6 +111,8 @@ then ask questions like *"who did GB7RDG talk to in the last hour?"* or
 - `activity(bucket, ...)` – frame counts per hour/day
 - `stats(...)` – per-band summary and top talkers
 - `tx_timing(...)` – ACKMODE transmit timing (airtime, queue-to-ack) per TX frame
+- `modem_params(...)` – ledger of modem config commands sent to the modem
+  (TxDelay, Persistence, SlotTime, …) with decoded values
 - `run_sql(sql)` – read-only SQL over a unified view of all hosts' data
 
 The MCP server speaks in human terms: directions are **RX**/**TX** (not

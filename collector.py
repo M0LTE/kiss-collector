@@ -95,7 +95,29 @@ CREATE TABLE IF NOT EXISTS ack_timing (
 );
 CREATE INDEX IF NOT EXISTS idx_ackt_ts  ON ack_timing(ts_unix);
 CREATE INDEX IF NOT EXISTS idx_ackt_seq ON ack_timing(seq);
+
+-- Ledger of modem parameter / control commands the host sends to the modem
+-- (TxDelay, Persistence, SlotTime, TxTail, FullDuplex, SetHardware, Return, ...)
+-- kept separate from the data-frame traffic in `frames`.
+CREATE TABLE IF NOT EXISTS modem_params (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts_unix    REAL    NOT NULL,
+    ts_utc     TEXT    NOT NULL,
+    host       TEXT    NOT NULL,
+    band       TEXT    NOT NULL,
+    direction  TEXT    NOT NULL,
+    port       TEXT    NOT NULL,
+    param      TEXT    NOT NULL,   -- native command name, e.g. TxDelay
+    value      INTEGER,            -- first value byte (NULL if none)
+    raw_hex    TEXT                -- full payload, hex
+);
+CREATE INDEX IF NOT EXISTS idx_mp_ts    ON modem_params(ts_unix);
+CREATE INDEX IF NOT EXISTS idx_mp_param ON modem_params(param);
 """
+
+# KISS command (frame) types that are genuine data traffic; everything else is
+# a modem parameter/control command routed to the modem_params ledger.
+DATA_FRAME_TYPES = ("DataFrameKissCmd", "AckModeKissCmd")
 
 
 def get_conn(host):
@@ -119,10 +141,36 @@ def get_conn(host):
             except sqlite3.OperationalError:
                 pass
         conn.executescript(SCHEMA)
+        _relocate_params(conn)
         conn.commit()
         _conns[safe] = conn
         log.info("opened database %s", path)
     return conn
+
+
+def _relocate_params(conn):
+    """Move any parameter/control commands previously stored in `frames` into
+    the modem_params ledger, so `frames` holds only data traffic. Idempotent."""
+    placeholders = ",".join("?" * len(DATA_FRAME_TYPES))
+    rows = conn.execute(
+        "SELECT ts_unix, ts_utc, host, band, direction, port, frame_type, "
+        "payload FROM frames WHERE frame_type NOT IN (%s)" % placeholders,
+        DATA_FRAME_TYPES,
+    ).fetchall()
+    if not rows:
+        return
+    for (tsu, iso, host, band, direction, port, ft, payload) in rows:
+        payload = bytes(payload or b"")
+        param = ft[:-7] if ft.endswith("KissCmd") else ft
+        conn.execute(
+            "INSERT INTO modem_params (ts_unix, ts_utc, host, band, direction, "
+            "port, param, value, raw_hex) VALUES (?,?,?,?,?,?,?,?,?)",
+            (tsu, iso, host, band, direction, port, param,
+             payload[0] if payload else None, payload.hex()),
+        )
+    conn.execute("DELETE FROM frames WHERE frame_type NOT IN (%s)" % placeholders,
+                 DATA_FRAME_TYPES)
+    log.info("relocated %d parameter rows from frames -> modem_params", len(rows))
 
 
 def migrate_existing():
@@ -152,9 +200,32 @@ def _heartbeat(now):
                  _stats["stored"], _stats["skipped"], len(_conns))
 
 
+def store_param(parts, payload):
+    # a modem parameter/control command (host -> modem); ledger, not traffic
+    _, host, band, direction, _framing, port, frame_type = parts
+    param = frame_type[:-7] if frame_type.endswith("KissCmd") else frame_type
+    now = time.time()
+    iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+    with _lock:
+        conn = get_conn(host)
+        conn.execute(
+            "INSERT INTO modem_params (ts_unix, ts_utc, host, band, direction, "
+            "port, param, value, raw_hex) VALUES (?,?,?,?,?,?,?,?,?)",
+            (now, iso, host, band, direction, port, param,
+             payload[0] if payload else None, payload.hex()),
+        )
+        conn.commit()
+    _stats["stored"] += 1
+    log.info("modem param %s=%s band=%s", param, payload[0] if payload else None, band)
+    _heartbeat(now)
+
+
 def store_frame(parts, payload):
     # kissproxy/<host>/<band>/<direction>/unframed/<port>/<frameType>
     _, host, band, direction, _framing, port, frame_type = parts
+    if frame_type not in DATA_FRAME_TYPES:
+        store_param(parts, payload)
+        return
     now = time.time()
     iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
     # AckMode frames carry a 2-byte sequence prefix; capture it for correlation
