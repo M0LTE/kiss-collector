@@ -124,6 +124,7 @@ def parse_when(s):
 
 
 def norm_direction(d):
+    """Input normalisation: accept RX/TX (or raw) -> DB value fromModem/toModem."""
     if not d:
         return None
     d = str(d).lower()
@@ -132,6 +133,23 @@ def norm_direction(d):
     if d in ("tx", "tomodem"):
         return "toModem"
     return d
+
+
+def dir_label(d):
+    """Output: DB direction -> human RX/TX."""
+    return "TX" if d == "toModem" else "RX" if d == "fromModem" else d
+
+
+def native_frame_type(ft):
+    """'DataFrameKissCmd' -> 'DataFrame' (strip the KissCmd suffix)."""
+    return ft[:-7] if ft and ft.endswith("KissCmd") else ft
+
+
+def denorm_frame_type(name):
+    """Input: accept native 'DataFrame' (or full) -> DB 'DataFrameKissCmd'."""
+    if not name:
+        return None
+    return name if name.endswith("KissCmd") else name + "KissCmd"
 
 
 # ----------------------------------------------------------------- DB access
@@ -409,13 +427,58 @@ def activity(f, bucket="hour"):
     return [{"bucket": k, "frames": v} for k, v in sorted(buckets.items())]
 
 
+def tx_timing(f, limit=200):
+    """ACKMODE transmit-timing records (from kissproxy), newest first.
+    Filterable by host/band/time."""
+    clauses, params = [], []
+    if f.get("band"):
+        clauses.append("band = ?")
+        params.append(f["band"])
+    if f.get("from_ts"):
+        clauses.append("ts_unix >= ?")
+        params.append(float(f["from_ts"]))
+    if f.get("to_ts"):
+        clauses.append("ts_unix <= ?")
+        params.append(float(f["to_ts"]))
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    cols = ["received", "band", "seq", "payload_bytes", "mode", "mode_name",
+            "bit_rate", "txdelay_ms", "tx_duration_ms", "total_ms",
+            "queued_utc", "tx_end_utc"]
+    out = []
+    for path in host_dbs():
+        host = host_name(path)
+        if f.get("host") and host != f["host"]:
+            continue
+        try:
+            con = connect(path)
+            sql = ("SELECT ts_utc, band, seq, payload_bytes, mode, mode_name, "
+                   "bit_rate, txdelay_ms, tx_duration_ms, total_ms, queued_utc, "
+                   "tx_end_utc FROM ack_timing" + where +
+                   " ORDER BY ts_unix DESC LIMIT ?")
+            for row in con.execute(sql, params + [limit]):
+                d = dict(zip(cols, row))
+                d["host"] = host
+                out.append(d)
+            con.close()
+        except sqlite3.Error:
+            continue
+    out.sort(key=lambda x: x.get("received") or "", reverse=True)
+    return out[:limit]
+
+
 def _unified_conn():
     con = sqlite3.connect(":memory:")
     fv, av = [], []
     for i, path in enumerate(host_dbs()):
         sch = "h%d" % i
         con.execute("ATTACH DATABASE ? AS %s" % sch, (path,))
-        fv.append("SELECT * FROM %s.frames" % sch)
+        # present friendly direction (RX/TX) and native frame-type names
+        fv.append(
+            "SELECT id, ts_unix, ts_utc, host, band, "
+            "CASE direction WHEN 'toModem' THEN 'TX' "
+            "WHEN 'fromModem' THEN 'RX' ELSE direction END AS direction, "
+            "port, replace(frame_type, 'KissCmd', '') AS frame_type, "
+            "topic, payload, payload_len FROM %s.frames" % sch)
         av.append("SELECT * FROM %s.ack_timing" % sch)
     if fv:
         con.execute("CREATE TEMP VIEW frames AS " + " UNION ALL ".join(fv))

@@ -22,16 +22,24 @@ mcp = FastMCP(
 def _slim(d):
     return {"time": d["ts_utc"], "from": d["from"], "to": d["to"],
             "via": d["via"], "band": d["band"], "host": d["host"],
-            "dir": "TX" if d["direction"] == "toModem" else "RX",
+            "dir": kisslib.dir_label(d["direction"]),
             "type": d["type"], "len": d["len"], "info": d["info"],
-            "frame_type": d["frame_type"], "tx_time_ms": d["tx_time_ms"]}
+            "frame_type": kisslib.native_frame_type(d["frame_type"]),
+            "tx_time_ms": d["tx_time_ms"],
+            "tx_duration_ms": d["tx_duration_ms"]}
 
 
 @mcp.tool()
 def overview() -> dict:
     """Orientation: which hosts/bands/directions/frame-types exist, the total
-    frame count, and the earliest/latest capture times. Call this first."""
-    return kisslib.overview()
+    frame count, and the earliest/latest capture times. Directions are RX
+    (received) / TX (transmitted); frame types use native KISS command names
+    (DataFrame, TxDelay, AckMode, ...). Call this first."""
+    o = kisslib.overview()
+    o["directions"] = [kisslib.dir_label(d) for d in o.get("directions", [])]
+    o["frame_types"] = [kisslib.native_frame_type(t)
+                        for t in o.get("frame_types", [])]
+    return o
 
 
 @mcp.tool()
@@ -45,8 +53,8 @@ def search_traffic(callsign: str = "", station_from: str = "",
     station_from - match only the source (from) callsign
     station_to   - match only the destination (to) callsign
     band         - e.g. '2m', '40m', '70cm'
-    direction    - 'RX'/'fromModem' (received) or 'TX'/'toModem' (transmitted)
-    frame_type   - e.g. 'DataFrameKissCmd'
+    direction    - 'RX' (received) or 'TX' (transmitted)
+    frame_type   - native KISS command name, e.g. 'DataFrame', 'AckMode'
     since/until  - time bounds: ISO ('2026-06-22 20:00'), epoch, or relative
                    shorthand like '30m','6h','7d'
     contains     - free-text substring match over callsigns, info text and hex
@@ -55,7 +63,8 @@ def search_traffic(callsign: str = "", station_from: str = "",
     Returns rows with time, from, to, via, band, dir, type, info and (for TX
     frames) tx_time_ms (kissproxy ACKMODE queue-to-ack time)."""
     f = {"band": band or None, "direction": kisslib.norm_direction(direction),
-         "frame_type": frame_type or None, "callsign": callsign or None,
+         "frame_type": kisslib.denorm_frame_type(frame_type),
+         "callsign": callsign or None,
          "q": contains or None, "from_ts": kisslib.parse_when(since),
          "to_ts": kisslib.parse_when(until)}
     res = kisslib.search(f, limit=min(int(limit), 1000))
@@ -90,10 +99,33 @@ def activity(bucket: str = "hour", band: str = "", direction: str = "",
 @mcp.tool()
 def stats(band: str = "", since: str = "", until: str = "") -> dict:
     """Per-band summary (frames, bytes, first/last heard), frame-type and
-    direction counts, and top source/destination callsigns."""
+    direction (RX/TX) counts, and top source/destination callsigns."""
     f = {"band": band or None, "from_ts": kisslib.parse_when(since),
          "to_ts": kisslib.parse_when(until)}
-    return kisslib.stats(f)
+    s = kisslib.stats(f)
+    s["directions"] = [{"k": kisslib.dir_label(x["k"]), "n": x["n"]}
+                       for x in s["directions"]]
+    s["frame_types"] = [{"k": kisslib.native_frame_type(x["k"]), "n": x["n"]}
+                        for x in s["frame_types"]]
+    return s
+
+
+@mcp.tool()
+def tx_timing(band: str = "", since: str = "", until: str = "",
+              limit: int = 100) -> list:
+    """ACKMODE transmit-timing, one record per acknowledged outbound (TX)
+    frame, as measured by kissproxy. Fields (times in milliseconds):
+      seq            - 16-bit KISS sequence number
+      payload_bytes  - AX.25 payload size
+      mode/mode_name/bit_rate - NinoTNC mode in use
+      txdelay_ms     - configured TX delay
+      tx_duration_ms - on-air transmission time (airtime)
+      total_ms       - total queue-to-ack time (airtime + channel access + delay)
+      queued_utc / tx_end_utc - queued and acknowledged timestamps
+    Optionally scope by band/time. Newest first."""
+    f = {"band": band or None, "from_ts": kisslib.parse_when(since),
+         "to_ts": kisslib.parse_when(until)}
+    return kisslib.tx_timing(f, limit=min(int(limit), 1000))
 
 
 @mcp.tool()
@@ -103,12 +135,12 @@ def run_sql(sql: str) -> dict:
     (callsigns are NOT columns - decode-based questions use search_traffic).
 
     Tables/views:
-      frames(id, ts_unix REAL, ts_utc TEXT, host, band, direction
-             ['fromModem'|'toModem'], port, frame_type, topic, payload BLOB,
+      frames(id, ts_unix REAL, ts_utc TEXT, host, band, direction ['RX'|'TX'],
+             port, frame_type [native, e.g. 'DataFrame'], topic, payload BLOB,
              payload_len)
       ack_timing(id, ts_unix, ts_utc, host, band, seq, payload_bytes, mode,
-             mode_name, bit_rate, txdelay_ms, tx_duration_ms, total_ms,
-             queued_utc, tx_start_utc, tx_end_utc, raw)
+             mode_name, bit_rate, txdelay_ms, tx_duration_ms [airtime],
+             total_ms [queue-to-ack], queued_utc, tx_start_utc, tx_end_utc, raw)
 
     ts_unix is epoch seconds; use strftime('%Y-%m-%d %H:00', ts_unix,'unixepoch')
     to bucket by time. Payload blobs are returned hex-encoded. Max 500 rows."""

@@ -105,7 +105,12 @@ then ask questions like *"who did GB7RDG talk to in the last hour?"* or
 - `top_talkers(by, ...)` – most active source or destination callsigns
 - `activity(bucket, ...)` – frame counts per hour/day
 - `stats(...)` – per-band summary and top talkers
+- `tx_timing(...)` – ACKMODE transmit timing (airtime, queue-to-ack) per TX frame
 - `run_sql(sql)` – read-only SQL over a unified view of all hosts' data
+
+The MCP server speaks in human terms: directions are **RX**/**TX** (not
+fromModem/toModem) and frame types use native KISS command names (**DataFrame**,
+not DataFrameKissCmd).
 
 ### Authentication
 
