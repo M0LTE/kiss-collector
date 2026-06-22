@@ -12,8 +12,28 @@ from mcp.server.fastmcp import FastMCP
 
 import kisslib
 
+INSTRUCTIONS = """AX.25 packet-radio traffic captured from KISS/MQTT collectors,
+one database per receiving node (host).
+
+Glossary — these are easy to confuse, read carefully:
+- Every frame has `from` (the station that TRANSMITTED it), `to` (the
+  DESTINATION address it was sent to), `via` (digipeater path), and `dir`:
+    RX = the node RECEIVED it over the air (the node "heard" this frame)
+    TX = the node itself TRANSMITTED it
+- "Stations heard by <node>" = the `from` of RX frames. A node hears every
+  frame on the channel regardless of its `to`, so the destination (`to`) is
+  NOT who heard the frame, and `to` being a node's callsign does not mean that
+  node is the receiver here.
+- "Last heard" / "most recently heard" = the newest RX frame. Results are
+  newest-first, so the first RX row is the most recent.
+- "Who called X" / "addressed to X" = filter the destination (station_to=X);
+  a different question from who was heard.
+- Callsign SSIDs are significant: EI5IYB-1 and EI5IYB-7 are different stations.
+"""
+
 mcp = FastMCP(
     "kiss-collector",
+    instructions=INSTRUCTIONS,
     host=os.environ.get("MCP_HOST", "0.0.0.0"),
     port=int(os.environ.get("MCP_PORT", "8765")),
 )
@@ -33,8 +53,9 @@ def _slim(d):
 def overview() -> dict:
     """Orientation: which hosts/bands/directions/frame-types exist, the total
     frame count, and the earliest/latest capture times. Directions are RX
-    (received) / TX (transmitted); frame types use native KISS command names
-    (DataFrame, TxDelay, AckMode, ...). Call this first."""
+    (received over the air / "heard" by the node) / TX (transmitted by the
+    node); frame types use native KISS command names (DataFrame, TxDelay,
+    AckMode, ...). Call this first."""
     o = kisslib.overview()
     o["directions"] = [kisslib.dir_label(d) for d in o.get("directions", [])]
     o["frame_types"] = [kisslib.native_frame_type(t)
@@ -47,21 +68,30 @@ def search_traffic(callsign: str = "", station_from: str = "",
                    station_to: str = "", band: str = "", direction: str = "",
                    frame_type: str = "", since: str = "", until: str = "",
                    contains: str = "", limit: int = 100) -> list:
-    """Search decoded AX.25 frames, newest first.
+    """Search decoded AX.25 frames, NEWEST FIRST (the first row is the most
+    recent match). Use for "what/who was heard", "last heard", "who called X",
+    traffic between stations, etc.
 
-    callsign     - match this call in source, destination OR digipeater path
-    station_from - match only the source (from) callsign
-    station_to   - match only the destination (to) callsign
+    direction    - 'RX' = frames the node RECEIVED over the air (i.e. HEARD);
+                   'TX' = frames the node TRANSMITTED. "Heard"/"copied"
+                   questions are RX, and the heard station is the frame's `from`.
+    station_from - the TRANSMITTING station (for RX, the station that was heard)
+    station_to   - the DESTINATION address. NOTE: who the frame was addressed
+                   to, NOT who heard it — the node receives every frame on the
+                   channel regardless of destination.
+    callsign     - match in `from`, `to` OR `via` (any role)
     band         - e.g. '2m', '40m', '70cm'
-    direction    - 'RX' (received) or 'TX' (transmitted)
     frame_type   - native KISS command name, e.g. 'DataFrame', 'AckMode'
     since/until  - time bounds: ISO ('2026-06-22 20:00'), epoch, or relative
                    shorthand like '30m','6h','7d'
-    contains     - free-text substring match over callsigns, info text and hex
+    contains     - free-text substring over callsigns, info text and hex
     limit        - max rows (default 100)
 
-    Returns rows with time, from, to, via, band, dir, type, info and (for TX
-    frames) tx_time_ms (kissproxy ACKMODE queue-to-ack time)."""
+    Tip: "last station heard on 40m" -> direction='RX', band='40m', read the
+    first row's `from`. SSIDs are significant (EI5IYB-1 != EI5IYB-7).
+
+    Returns time, from, to, via, band, dir, type, info, and for TX frames
+    tx_time_ms / tx_duration_ms (ACKMODE queue-to-ack time and airtime)."""
     f = {"band": band or None, "direction": kisslib.norm_direction(direction),
          "frame_type": kisslib.denorm_frame_type(frame_type),
          "callsign": callsign or None,
@@ -78,8 +108,10 @@ def search_traffic(callsign: str = "", station_from: str = "",
 @mcp.tool()
 def top_talkers(by: str = "from", band: str = "", direction: str = "",
                 since: str = "", until: str = "", limit: int = 20) -> list:
-    """Most active callsigns. by='from' (sources) or 'to' (destinations).
-    Optionally scope by band/direction/time. Returns [{call, count}]."""
+    """Most active callsigns. by='from' = transmitting stations (with
+    direction='RX' these are the stations heard most often); by='to' =
+    most-addressed destinations. Scope with band/direction/time.
+    Returns [{call, count}]."""
     f = {"band": band or None, "direction": kisslib.norm_direction(direction),
          "from_ts": kisslib.parse_when(since), "to_ts": kisslib.parse_when(until)}
     return kisslib.top_talkers(f, by=("to" if by == "to" else "from"),
