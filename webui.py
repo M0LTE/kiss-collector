@@ -136,7 +136,7 @@ PAGE = r"""<!doctype html>
 <div id="bar">loading...</div>
 <div id="wrap"><table id="t"><thead><tr>
  <th>UTC time</th><th>Host</th><th>Band</th><th>From</th><th>To</th><th>Via</th>
- <th>Dir</th><th>Type</th><th>Len</th><th>Tx time</th>
+ <th>Dir</th><th>Type</th><th>Len</th><th>Queued</th><th>Tx start</th><th>Airtime</th>
 </tr></thead><tbody id="tb"></tbody></table></div>
 <div id="statspanel" style="display:none"></div>
 <div id="paramspanel" style="display:none"></div>
@@ -190,13 +190,18 @@ function dirLabel(x){return x==='fromModem'?'RX':x==='toModem'?'TX':x;}
 function row(d){
  const tr=document.createElement('tr');
  const t=new Date(d.ts_unix*1000).toISOString().replace('T',' ').slice(0,23);
- let tx='', txTitle='';
+ let qd='', txStart='', air='', txTitle='';
  if(d.tx_time_ms!=null){
-   tx=d.tx_time_ms>=1000?(d.tx_time_ms/1000).toFixed(1)+' s':Math.round(d.tx_time_ms)+' ms';
    const hms=u=>new Date(u*1000).toISOString().slice(11,23);
-   txTitle=`queued ${hms(d.ts_unix)} → acked ${hms(d.ts_unix+d.tx_time_ms/1000)} `
-     +`(${(d.tx_time_ms/1000).toFixed(1)} s queue→ack)`
-     +(d.tx_duration_ms!=null?`; this frame's airtime ${d.tx_duration_ms} ms`:'');
+   const fmt=ms=>ms>=1000?(ms/1000).toFixed(2)+' s':Math.round(ms)+' ms';
+   qd=hms(d.ts_unix);
+   if(d.tx_duration_ms!=null){
+     txStart=hms(d.ts_unix+(d.tx_time_ms-d.tx_duration_ms)/1000);
+     air=fmt(d.tx_duration_ms);
+   }
+   const wait=(d.tx_time_ms-(d.tx_duration_ms||0))/1000;
+   txTitle=`queued ${qd} → on air ${txStart||'?'} → acked ${hms(d.ts_unix+d.tx_time_ms/1000)}`
+     +` (${(d.tx_time_ms/1000).toFixed(1)} s queue→ack, ${wait.toFixed(1)} s waiting for channel)`;
  }
  const dl=dirLabel(d.direction);
  const ti=typeLabel(d.type);
@@ -206,7 +211,7 @@ function row(d){
   <td class=via>${d.via||''}</td>
   <td class="dir ${dl}">${dl}</td>
   <td title="${esc(ti.title)}">${esc(ti.text)}</td><td>${d.len}</td>
-  <td class=mono title="${esc(txTitle)}">${tx}</td>`;
+  <td class=mono>${qd}</td><td class=mono title="${esc(txTitle)}">${txStart}</td><td class=mono>${air}</td>`;
  tr.onclick=()=>toggleDetail(tr,d);
  return tr;
 }
@@ -214,7 +219,7 @@ function toggleDetail(tr,d){
  const nx=tr.nextSibling;
  if(nx&&nx.classList&&nx.classList.contains('det')){nx.remove();return;}
  const dr=document.createElement('tr');dr.className='det';
- dr.innerHTML=`<td colspan=10><div><b>info:</b> ${esc(d.info)||'<i>none</i>'}</div>
+ dr.innerHTML=`<td colspan=12><div><b>info:</b> ${esc(d.info)||'<i>none</i>'}</div>
   <div><b>kiss cmd:</b> ${d.frame_type} &nbsp; <b>port:</b> ${d.port}`+
   (d.tx_duration_ms!=null?` &nbsp; <b>airtime:</b> ${d.tx_duration_ms} ms`:'')+`</div>
   <div class=mono><b>hex:</b> ${d.hex}</div></td>`;
