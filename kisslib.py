@@ -152,6 +152,13 @@ def iso(ts):
     return dt.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%SZ") if ts else ""
 
 
+def iso_ms(ts):
+    """Epoch -> ISO-8601 UTC with milliseconds, e.g. 2026-06-23T08:48:57.824Z."""
+    if not ts:
+        return None
+    return dt.datetime.utcfromtimestamp(ts).isoformat(timespec="milliseconds") + "Z"
+
+
 def parse_utc(s):
     """Parse a .NET ISO-8601 UTC timestamp -> epoch seconds, or None."""
     if not s:
@@ -302,7 +309,18 @@ def row_to_dict(host, r):
          "ts_utc": ts_utc, "band": band, "direction": direction, "port": port,
          "frame_type": frame_type, "len": len(payload), "hex": payload.hex(),
          "from": "", "to": "", "via": "", "type": "", "info": "",
-         "tx_time_ms": tx_time_ms, "tx_duration_ms": tx_duration_ms}
+         "tx_time_ms": tx_time_ms, "tx_duration_ms": tx_duration_ms,
+         "queued_utc": None, "tx_start_utc": None, "tx_end_utc": None,
+         "channel_wait_ms": None}
+    # derived ACKMODE transmit timeline (frames carrying a receipt only):
+    # the frame timestamp is the queue moment; ack is tx_time_ms later;
+    # transmission starts airtime before the ack.
+    if tx_time_ms is not None:
+        d["queued_utc"] = iso_ms(ts_unix)
+        d["tx_end_utc"] = iso_ms(ts_unix + tx_time_ms / 1000.0)
+        if tx_duration_ms is not None:
+            d["tx_start_utc"] = iso_ms(ts_unix + (tx_time_ms - tx_duration_ms) / 1000.0)
+            d["channel_wait_ms"] = round(tx_time_ms - tx_duration_ms, 1)
     dec = decode_frame(payload, frame_type)
     ctl = ax25_control(payload, frame_type)
     if dec:

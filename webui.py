@@ -192,16 +192,13 @@ function row(d){
  const t=new Date(d.ts_unix*1000).toISOString().replace('T',' ').slice(0,23);
  let qd='', txStart='', air='', txTitle='';
  if(d.tx_time_ms!=null){
-   const hms=u=>new Date(u*1000).toISOString().slice(11,23);
+   const hm=s=>s?s.slice(11,23):'';   // HH:MM:SS.mmm from ISO ...THH:MM:SS.mmmZ
    const fmt=ms=>ms>=1000?(ms/1000).toFixed(2)+' s':Math.round(ms)+' ms';
-   qd=hms(d.ts_unix);
-   if(d.tx_duration_ms!=null){
-     txStart=hms(d.ts_unix+(d.tx_time_ms-d.tx_duration_ms)/1000);
-     air=fmt(d.tx_duration_ms);
-   }
-   const wait=(d.tx_time_ms-(d.tx_duration_ms||0))/1000;
-   txTitle=`queued ${qd} → on air ${txStart||'?'} → acked ${hms(d.ts_unix+d.tx_time_ms/1000)}`
-     +` (${(d.tx_time_ms/1000).toFixed(1)} s queue→ack, ${wait.toFixed(1)} s waiting for channel)`;
+   qd=hm(d.queued_utc); txStart=hm(d.tx_start_utc);
+   if(d.tx_duration_ms!=null) air=fmt(d.tx_duration_ms);
+   txTitle=`queued ${qd} → on air ${txStart||'?'} → acked ${hm(d.tx_end_utc)}`
+     +` (${(d.tx_time_ms/1000).toFixed(1)} s queue→ack`
+     +(d.channel_wait_ms!=null?`, ${(d.channel_wait_ms/1000).toFixed(1)} s waiting for channel`:'')+')';
  }
  const dl=dirLabel(d.direction);
  const ti=typeLabel(d.type);

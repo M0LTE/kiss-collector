@@ -50,8 +50,11 @@ def _slim(d):
             "dir": kisslib.dir_label(d["direction"]),
             "type": d["type"], "len": d["len"], "info": d["info"],
             "frame_type": kisslib.native_frame_type(d["frame_type"]),
-            "tx_time_ms": d["tx_time_ms"],
-            "tx_duration_ms": d["tx_duration_ms"]}
+            # ACKMODE transmit timeline (TX frames carrying a receipt only)
+            "queued_utc": d["queued_utc"], "tx_start_utc": d["tx_start_utc"],
+            "tx_end_utc": d["tx_end_utc"], "airtime_ms": d["tx_duration_ms"],
+            "channel_wait_ms": d["channel_wait_ms"],
+            "queue_to_ack_ms": d["tx_time_ms"]}
 
 
 @mcp.tool()
@@ -95,8 +98,10 @@ def search_traffic(callsign: str = "", station_from: str = "",
     Tip: "last station heard on 40m" -> direction='RX', band='40m', read the
     first row's `from`. SSIDs are significant (EI5IYB-1 != EI5IYB-7).
 
-    Returns time, from, to, via, band, dir, type, info, and for TX frames
-    tx_time_ms / tx_duration_ms (ACKMODE queue-to-ack time and airtime)."""
+    Returns time, from, to, via, band, dir, type, info, and -- for TX frames
+    carrying an ACKMODE receipt -- the transmit timeline: queued_utc,
+    tx_start_utc (went on air), tx_end_utc (acked), airtime_ms, channel_wait_ms
+    (queue-to-on-air delay, i.e. channel-access wait) and queue_to_ack_ms."""
     f = {"band": band or None, "direction": kisslib.norm_direction(direction),
          "frame_type": kisslib.denorm_frame_type(frame_type),
          "callsign": callsign or None,
