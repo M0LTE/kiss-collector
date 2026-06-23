@@ -194,7 +194,9 @@ def run_sql(sql: str) -> dict:
              port, frame_type [native, e.g. 'DataFrame'; data traffic only],
              topic, payload BLOB, payload_len, seq, tx_time_ms, tx_duration_ms,
              ax_type [AX.25 subtype: I/RR/RNR/REJ/SREJ/SABM/UA/DISC/DM/UI/XID],
-             ns [send seq N(S), I-frames], nr [recv seq/ack N(R)], pf [poll/final])
+             ns [send seq N(S), I-frames], nr [recv seq/ack N(R)], pf [poll/final],
+             queued_utc, tx_start_utc, tx_end_utc, channel_wait_ms
+             [derived transmit timeline; non-NULL only for TX frames w/ receipt])
       modem_params(id, ts_unix, ts_utc, host, band, direction, port,
              param [e.g. 'TxDelay'], value, raw_hex)  -- host->modem config cmds
       link_params(id, ts_unix, ts_utc, host, band, direction, port, station,

@@ -604,7 +604,15 @@ def _unified_conn():
             "WHEN 'fromModem' THEN 'RX' ELSE direction END AS direction, "
             "port, replace(frame_type, 'KissCmd', '') AS frame_type, "
             "topic, payload, payload_len, seq, tx_time_ms, tx_duration_ms, "
-            "ax_type, ns, nr, pf FROM %s.frames" % sch)
+            "ax_type, ns, nr, pf, "
+            # derived ACKMODE transmit timeline (NULL without a receipt)
+            "CASE WHEN tx_time_ms IS NOT NULL THEN "
+            "strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', ts_unix, 'unixepoch') END AS queued_utc, "
+            "strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', "
+            "ts_unix + (tx_time_ms - tx_duration_ms)/1000.0, 'unixepoch') AS tx_start_utc, "
+            "strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', ts_unix + tx_time_ms/1000.0, 'unixepoch') AS tx_end_utc, "
+            "round(tx_time_ms - tx_duration_ms, 1) AS channel_wait_ms "
+            "FROM %s.frames" % sch)
         av.append("SELECT * FROM %s.ack_timing" % sch)
         mv.append(
             "SELECT id, ts_unix, ts_utc, host, band, "
