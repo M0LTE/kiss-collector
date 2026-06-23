@@ -80,6 +80,74 @@ def printable(s):
     return "".join(c if 32 <= ord(c) < 127 else "." for c in s).rstrip(". ")
 
 
+_U_TYPES = {0x2F: "SABM", 0x6F: "SABME", 0x63: "UA", 0x43: "DISC", 0x0F: "DM",
+            0x87: "FRMR", 0xAF: "XID", 0xE3: "TEST", 0x03: "UI"}
+
+
+def _ctrl_offset(b):
+    """Byte offset of the AX.25 control field (end of the address field)."""
+    i = 0
+    while i + 7 <= len(b):
+        last = b[i + 6] & 1
+        i += 7
+        if last:
+            return i
+    return None
+
+
+def ax25_control(payload, frame_type=""):
+    """Decode the AX.25 control field (modulo-8): subtype + N(S)/N(R)/P-F.
+    Returns dict(ax_type, ns, nr, pf) or None. Strips AckMode seq prefix."""
+    b = bytes(payload or b"")
+    if "AckMode" in (frame_type or "") and len(b) > 2:
+        b = b[2:]
+    i = _ctrl_offset(b)
+    if i is None or i >= len(b):
+        return None
+    cb = b[i]
+    pf = (cb >> 4) & 1
+    if cb & 1 == 0:                       # Information frame
+        return {"ax_type": "I", "ns": (cb >> 1) & 7, "nr": (cb >> 5) & 7, "pf": pf}
+    if cb & 3 == 1:                       # Supervisory frame
+        st = {0x01: "RR", 0x05: "RNR", 0x09: "REJ", 0x0D: "SREJ"}.get(cb & 0x0F, "S")
+        return {"ax_type": st, "ns": None, "nr": (cb >> 5) & 7, "pf": pf}
+    return {"ax_type": _U_TYPES.get(cb & 0xEF, "U"), "ns": None, "nr": None, "pf": pf}
+
+
+def parse_xid(payload, frame_type=""):
+    """Decode an AX.25 2.2 XID negotiation block -> advertised link params:
+    window_k, n1_bytes, t1_ms, n2, hdlc_opts (hex). Returns {} / None."""
+    b = bytes(payload or b"")
+    if "AckMode" in (frame_type or "") and len(b) > 2:
+        b = b[2:]
+    i = _ctrl_offset(b)
+    if i is None or i >= len(b) or (b[i] & 0xEF) != 0xAF:
+        return None
+    p = i + 1
+    if p + 4 > len(b) or b[p] != 0x82 or b[p + 1] != 0x80:
+        return None                       # FI/GI not XID
+    glen = (b[p + 2] << 8) | b[p + 3]
+    p += 4
+    end = min(p + glen, len(b))
+    out = {}
+    while p + 2 <= end:
+        pi, pl = b[p], b[p + 1]
+        pv = b[p + 2:p + 2 + pl]
+        val = int.from_bytes(pv, "big") if pv else None
+        p += 2 + pl
+        if pi == 6:
+            out["n1_bytes"] = val // 8 if val else None
+        elif pi == 8:
+            out["window_k"] = val
+        elif pi == 9:
+            out["t1_ms"] = val
+        elif pi == 10:
+            out["n2"] = val
+        elif pi == 3:
+            out["hdlc_opts"] = pv.hex()
+    return out
+
+
 def iso(ts):
     return dt.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%SZ") if ts else ""
 
@@ -482,7 +550,7 @@ def params(f, limit=200):
 
 def _unified_conn():
     con = sqlite3.connect(":memory:")
-    fv, av, mv = [], [], []
+    fv, av, mv, lv = [], [], [], []
     for i, path in enumerate(host_dbs()):
         sch = "h%d" % i
         con.execute("ATTACH DATABASE ? AS %s" % sch, (path,))
@@ -492,18 +560,25 @@ def _unified_conn():
             "CASE direction WHEN 'toModem' THEN 'TX' "
             "WHEN 'fromModem' THEN 'RX' ELSE direction END AS direction, "
             "port, replace(frame_type, 'KissCmd', '') AS frame_type, "
-            "topic, payload, payload_len, seq, tx_time_ms, tx_duration_ms "
-            "FROM %s.frames" % sch)
+            "topic, payload, payload_len, seq, tx_time_ms, tx_duration_ms, "
+            "ax_type, ns, nr, pf FROM %s.frames" % sch)
         av.append("SELECT * FROM %s.ack_timing" % sch)
         mv.append(
             "SELECT id, ts_unix, ts_utc, host, band, "
             "CASE direction WHEN 'toModem' THEN 'TX' "
             "WHEN 'fromModem' THEN 'RX' ELSE direction END AS direction, "
             "port, param, value, raw_hex FROM %s.modem_params" % sch)
+        lv.append(
+            "SELECT id, ts_unix, ts_utc, host, band, "
+            "CASE direction WHEN 'toModem' THEN 'TX' "
+            "WHEN 'fromModem' THEN 'RX' ELSE direction END AS direction, "
+            "port, station, peer, window_k, n1_bytes, t1_ms, n2, hdlc_opts "
+            "FROM %s.link_params" % sch)
     if fv:
         con.execute("CREATE TEMP VIEW frames AS " + " UNION ALL ".join(fv))
         con.execute("CREATE TEMP VIEW ack_timing AS " + " UNION ALL ".join(av))
         con.execute("CREATE TEMP VIEW modem_params AS " + " UNION ALL ".join(mv))
+        con.execute("CREATE TEMP VIEW link_params AS " + " UNION ALL ".join(lv))
     return con
 
 

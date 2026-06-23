@@ -187,9 +187,13 @@ def run_sql(sql: str) -> dict:
     Tables/views:
       frames(id, ts_unix REAL, ts_utc TEXT, host, band, direction ['RX'|'TX'],
              port, frame_type [native, e.g. 'DataFrame'; data traffic only],
-             topic, payload BLOB, payload_len, seq, tx_time_ms, tx_duration_ms)
+             topic, payload BLOB, payload_len, seq, tx_time_ms, tx_duration_ms,
+             ax_type [AX.25 subtype: I/RR/RNR/REJ/SREJ/SABM/UA/DISC/DM/UI/XID],
+             ns [send seq N(S), I-frames], nr [recv seq/ack N(R)], pf [poll/final])
       modem_params(id, ts_unix, ts_utc, host, band, direction, port,
              param [e.g. 'TxDelay'], value, raw_hex)  -- host->modem config cmds
+      link_params(id, ts_unix, ts_utc, host, band, direction, port, station,
+             peer, window_k, n1_bytes, t1_ms, n2, hdlc_opts)  -- from AX.25 XID
       ack_timing(id, ts_unix, ts_utc, host, band, seq, payload_bytes, mode,
              mode_name, bit_rate, txdelay_ms, tx_duration_ms [airtime],
              total_ms [queue-to-ack], queued_utc, tx_start_utc, tx_end_utc, raw)

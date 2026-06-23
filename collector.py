@@ -29,6 +29,8 @@ import logging
 
 import paho.mqtt.client as mqtt
 
+import kisslib  # shared AX.25 decode (same directory)
+
 MQTT_HOST = os.environ.get("MQTT_HOST", "mqtt.lan")
 MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
 MQTT_USER = os.environ.get("MQTT_USER") or None
@@ -64,12 +66,38 @@ CREATE TABLE IF NOT EXISTS frames (
     payload_len INTEGER NOT NULL,
     seq            INTEGER,   -- KISS sequence number (AckMode frames only)
     tx_time_ms     REAL,      -- ACKMODE queue-to-ack time, filled on receipt
-    tx_duration_ms REAL       -- ACKMODE on-air time (airtime)
+    tx_duration_ms REAL,      -- ACKMODE on-air time (airtime)
+    ax_type        TEXT,      -- AX.25 frame subtype (I/RR/REJ/SREJ/SABM/UA/...)
+    ns             INTEGER,   -- AX.25 send sequence N(S) (I-frames)
+    nr             INTEGER,   -- AX.25 receive sequence N(R) (I and S frames)
+    pf             INTEGER    -- poll/final bit
 );
 CREATE INDEX IF NOT EXISTS idx_frames_ts       ON frames(ts_unix);
 CREATE INDEX IF NOT EXISTS idx_frames_band_dir ON frames(band, direction);
 CREATE INDEX IF NOT EXISTS idx_frames_type     ON frames(frame_type);
 CREATE INDEX IF NOT EXISTS idx_frames_seq      ON frames(seq);
+CREATE INDEX IF NOT EXISTS idx_frames_axtype   ON frames(ax_type);
+
+-- Link parameters advertised by each station via AX.25 2.2 XID negotiation.
+CREATE TABLE IF NOT EXISTS link_params (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts_unix   REAL NOT NULL,
+    ts_utc    TEXT NOT NULL,
+    host      TEXT NOT NULL,
+    band      TEXT NOT NULL,
+    direction TEXT,
+    port      TEXT,
+    station   TEXT,    -- source callsign (whose parameters these are)
+    peer      TEXT,    -- destination callsign
+    window_k  INTEGER, -- negotiated window size k
+    n1_bytes  INTEGER, -- max I-field length (bytes)
+    t1_ms     INTEGER, -- ack timer T1
+    n2        INTEGER, -- retry count N2
+    hdlc_opts TEXT,    -- HDLC optional functions bitfield (hex; SREJ/modulo)
+    raw_hex   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_lp_ts      ON link_params(ts_unix);
+CREATE INDEX IF NOT EXISTS idx_lp_station ON link_params(station);
 
 -- kissproxy's own ACKMODE transmit-timing, published to
 -- kissproxy/<host>/<band>/timing/ackmode as JSON. Used to attach a tx time
@@ -135,13 +163,15 @@ def get_conn(host):
         # (executescript then creates it complete); on a current DB -> duplicate
         # column, ignored.
         for col, typ in (("seq", "INTEGER"), ("tx_time_ms", "REAL"),
-                         ("tx_duration_ms", "REAL")):
+                         ("tx_duration_ms", "REAL"), ("ax_type", "TEXT"),
+                         ("ns", "INTEGER"), ("nr", "INTEGER"), ("pf", "INTEGER")):
             try:
                 conn.execute("ALTER TABLE frames ADD COLUMN %s %s" % (col, typ))
             except sqlite3.OperationalError:
                 pass
         conn.executescript(SCHEMA)
         _relocate_params(conn)
+        _backfill_decode(conn)
         conn.commit()
         _conns[safe] = conn
         log.info("opened database %s", path)
@@ -171,6 +201,45 @@ def _relocate_params(conn):
     conn.execute("DELETE FROM frames WHERE frame_type NOT IN (%s)" % placeholders,
                  DATA_FRAME_TYPES)
     log.info("relocated %d parameter rows from frames -> modem_params", len(rows))
+
+
+def _backfill_decode(conn):
+    """One-time: decode AX.25 control (ns/nr/ax_type/pf) for frames captured
+    before these columns existed, and seed link_params from historical XID."""
+    todo = conn.execute("SELECT id, frame_type, payload FROM frames "
+                        "WHERE ax_type IS NULL").fetchall()
+    for rid, ft, payload in todo:
+        ctl = kisslib.ax25_control(payload, ft)
+        if ctl:
+            conn.execute("UPDATE frames SET ax_type=?, ns=?, nr=?, pf=? WHERE id=?",
+                         (ctl["ax_type"], ctl["ns"], ctl["nr"], ctl["pf"], rid))
+    if todo:
+        log.info("backfilled AX.25 decode for %d frames", len(todo))
+    # seed link_params from historical XID frames, once
+    if conn.execute("SELECT count(*) FROM link_params").fetchone()[0] == 0:
+        n = 0
+        for row in conn.execute(
+                "SELECT ts_unix, ts_utc, host, band, direction, port, frame_type, "
+                "payload FROM frames WHERE ax_type='XID'"):
+            if _record_xid(conn, *row):
+                n += 1
+        if n:
+            log.info("seeded link_params with %d historical XID records", n)
+
+
+def _record_xid(conn, tsu, iso, host, band, direction, port, frame_type, payload):
+    x = kisslib.parse_xid(payload, frame_type)
+    if not x:
+        return False
+    dec = kisslib.decode_frame(payload, frame_type) or {}
+    conn.execute(
+        "INSERT INTO link_params (ts_unix, ts_utc, host, band, direction, port, "
+        "station, peer, window_k, n1_bytes, t1_ms, n2, hdlc_opts, raw_hex) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (tsu, iso, host, band, direction, port, dec.get("from"), dec.get("to"),
+         x.get("window_k"), x.get("n1_bytes"), x.get("t1_ms"), x.get("n2"),
+         x.get("hdlc_opts"), bytes(payload or b"").hex()))
+    return True
 
 
 def migrate_existing():
@@ -232,15 +301,22 @@ def store_frame(parts, payload):
     seq = None
     if "AckMode" in frame_type and len(payload) >= 2:
         seq = (payload[0] << 8) | payload[1]
+    # decode the AX.25 control field: subtype + N(S)/N(R)/P-F
+    ctl = kisslib.ax25_control(payload, frame_type) or {}
     with _lock:
         conn = get_conn(host)
         conn.execute(
             "INSERT INTO frames (ts_unix, ts_utc, host, band, direction, "
-            "port, frame_type, topic, payload, payload_len, seq) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "port, frame_type, topic, payload, payload_len, seq, "
+            "ax_type, ns, nr, pf) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (now, iso, host, band, direction, port, frame_type,
-             "/".join(parts), sqlite3.Binary(payload), len(payload), seq),
+             "/".join(parts), sqlite3.Binary(payload), len(payload), seq,
+             ctl.get("ax_type"), ctl.get("ns"), ctl.get("nr"), ctl.get("pf")),
         )
+        if ctl.get("ax_type") == "XID":
+            _record_xid(conn, now, iso, host, band, direction, port,
+                        frame_type, payload)
         conn.commit()
     _stats["stored"] += 1
     _heartbeat(now)
