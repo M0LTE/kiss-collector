@@ -148,6 +148,11 @@ const F=()=>({host:$('host').value,band:$('band').value,direction:$('direction')
  q:$('q').value.trim()});
 const qs=o=>Object.entries(o).filter(([,v])=>v).map(([k,v])=>k+'='+encodeURIComponent(v)).join('&');
 const esc=s=>(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function callColor(c){
+ if(!c) return '#8a93a3';
+ let h=0; for(let i=0;i<c.length;i++) h=(h*31+c.charCodeAt(i))|0;
+ return `hsl(${((h%360)+360)%360},62%,67%)`;
+}
 
 function dirLabel(x){return x==='fromModem'?'RX':x==='toModem'?'TX':x;}
 function row(d){
@@ -156,8 +161,8 @@ function row(d){
  const tx=d.tx_time_ms!=null?(d.tx_time_ms+' ms'):'';
  const dl=dirLabel(d.direction);
  tr.innerHTML=`<td class=mono>${t}</td><td class=mono>${d.host}</td><td>${d.band}</td>
-  <td class="call from">${d.from||'<span class=mono>?</span>'}</td>
-  <td class="call to">${d.to||''}</td>
+  <td class="call" style="color:${callColor(d.from)}">${d.from||'<span class=mono>?</span>'}</td>
+  <td class="call" style="color:${callColor(d.to)}">${d.to||''}</td>
   <td class=via>${d.via||''}</td>
   <td class="dir ${dl}">${dl}</td>
   <td>${d.type||''}</td><td>${d.len}</td>
@@ -210,8 +215,8 @@ async function loadStats(){
  const br=s.bands.map(b=>`<tr><td>${b.host}</td><td>${b.band}</td><td>${b.frames}</td><td>${fmtBytes(b.bytes)}</td><td class=mono>${b.first}</td><td class=mono>${b.last}</td></tr>`).join('')||'<tr><td colspan=6>no data</td></tr>';
  const ft=s.frame_types.map(x=>`${x.k}: <b>${x.n}</b>`).join(' &nbsp; ')||'-';
  const dr=s.directions.map(x=>`${x.k}: <b>${x.n}</b>`).join(' &nbsp; ')||'-';
- const tf=s.top_from.map(x=>`<tr><td class="call from">${x.call}</td><td>${x.n}</td></tr>`).join('')||'';
- const tt=s.top_to.map(x=>`<tr><td class="call to">${x.call}</td><td>${x.n}</td></tr>`).join('')||'';
+ const tf=s.top_from.map(x=>`<tr><td class=call style="color:${callColor(x.call)}">${x.call}</td><td>${x.n}</td></tr>`).join('')||'';
+ const tt=s.top_to.map(x=>`<tr><td class=call style="color:${callColor(x.call)}">${x.call}</td><td>${x.n}</td></tr>`).join('')||'';
  $('statspanel').innerHTML=`<h2>Per-band &mdash; ${s.total} frames total</h2>
   <table><thead><tr><th>Host</th><th>Band</th><th>Frames</th><th>Bytes</th><th>First heard</th><th>Last heard</th></tr></thead><tbody>${br}</tbody></table>
   <h2>Frame types</h2><div>${ft}</div><h2>Directions</h2><div>${dr}</div>
