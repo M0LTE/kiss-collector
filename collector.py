@@ -49,7 +49,7 @@ _HOST_SAFE = re.compile(r"[^A-Za-z0-9._-]")
 
 _conns = {}
 _lock = threading.Lock()
-_stats = {"stored": 0, "skipped": 0, "last_log": 0.0}
+_stats = {"stored": 0, "skipped": 0, "acks_dropped": 0, "last_log": 0.0}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS frames (
@@ -172,6 +172,7 @@ def get_conn(host):
         conn.executescript(SCHEMA)
         _relocate_params(conn)
         _backfill_decode(conn)
+        _purge_ack_noise(conn)
         conn.commit()
         _conns[safe] = conn
         log.info("opened database %s", path)
@@ -227,6 +228,16 @@ def _backfill_decode(conn):
             log.info("seeded link_params with %d historical XID records", n)
 
 
+def _purge_ack_noise(conn):
+    """One-time: remove content-less 2-byte ACKMODE ack frames previously stored
+    in `frames` (now filtered at capture; still represented in ack_timing)."""
+    cur = conn.execute("DELETE FROM frames WHERE frame_type = 'AckModeKissCmd' "
+                       "AND ax_type IS NULL AND payload_len <= 2")
+    if cur.rowcount:
+        log.info("purged %d content-less ACKMODE ack frames from frames",
+                 cur.rowcount)
+
+
 def _record_xid(conn, tsu, iso, host, band, direction, port, frame_type, payload):
     x = kisslib.parse_xid(payload, frame_type)
     if not x:
@@ -265,8 +276,9 @@ def on_connect(client, userdata, flags, rc, *args):
 def _heartbeat(now):
     if now - _stats["last_log"] >= 60:
         _stats["last_log"] = now
-        log.info("stored=%d skipped=%d dbs=%d",
-                 _stats["stored"], _stats["skipped"], len(_conns))
+        log.info("stored=%d skipped=%d acks_dropped=%d dbs=%d",
+                 _stats["stored"], _stats["skipped"], _stats["acks_dropped"],
+                 len(_conns))
 
 
 def store_param(parts, payload):
@@ -295,14 +307,20 @@ def store_frame(parts, payload):
     if frame_type not in DATA_FRAME_TYPES:
         store_param(parts, payload)
         return
+    # decode the AX.25 control field: subtype + N(S)/N(R)/P-F
+    ctl = kisslib.ax25_control(payload, frame_type)
+    # drop content-less ACKMODE acks (pure TNC ack/control plane, no AX.25;
+    # their transmit timing is already captured separately in ack_timing)
+    if ctl is None and "AckMode" in frame_type:
+        _stats["acks_dropped"] += 1
+        return
+    ctl = ctl or {}
     now = time.time()
     iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
     # AckMode frames carry a 2-byte sequence prefix; capture it for correlation
     seq = None
     if "AckMode" in frame_type and len(payload) >= 2:
         seq = (payload[0] << 8) | payload[1]
-    # decode the AX.25 control field: subtype + N(S)/N(R)/P-F
-    ctl = kisslib.ax25_control(payload, frame_type) or {}
     with _lock:
         conn = get_conn(host)
         conn.execute(
