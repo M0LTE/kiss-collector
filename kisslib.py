@@ -548,6 +548,29 @@ def params(f, limit=200):
     return out[:limit]
 
 
+def effective_from(hist):
+    """From newest-first param history, derive the *effective* (latest) value of
+    each parameter per (host, band, port), pivoted for display."""
+    seen, params_seen = {}, []
+    for d in hist:
+        key = (d["host"], d["band"], d["port"], d["param"])
+        if key not in seen:           # hist is newest-first -> first seen = latest
+            seen[key] = d
+        if d["param"] not in params_seen:
+            params_seen.append(d["param"])
+    rows = {}
+    for (host, band, port, param), d in seen.items():
+        rows.setdefault((host, band, port), {})[param] = {
+            "value": d["value"], "formatted": d["formatted"], "time": d["time"]}
+    canon = ["TxDelay", "Persistence", "SlotTime", "TxTail", "FullDuplex",
+             "SetHardware", "Return"]
+    cols = [p for p in canon if p in params_seen] + \
+           [p for p in sorted(params_seen) if p not in canon]
+    out = [{"host": h, "band": b, "port": p, "params": pv}
+           for (h, b, p), pv in sorted(rows.items())]
+    return {"columns": cols, "rows": out}
+
+
 def _unified_conn():
     con = sqlite3.connect(":memory:")
     fv, av, mv, lv = [], [], [], []

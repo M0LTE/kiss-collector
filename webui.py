@@ -33,7 +33,9 @@ def api_stats():
 @app.route("/api/params")
 def api_params():
     limit = min(int(request.args.get("limit", 500)), 5000)
-    return jsonify(kisslib.params(request.args, limit=limit))
+    full = kisslib.params(request.args, limit=5000)
+    return jsonify({"effective": kisslib.effective_from(full),
+                    "history": full[:limit]})
 
 
 @app.route("/export.pcap")
@@ -219,9 +221,18 @@ async function loadStats(){
 }
 async function loadParams(){
  const r=await(await fetch('/api/params?limit=500&'+qs(F()))).json();
- const rows=r.map(d=>`<tr><td class=mono>${d.time}</td><td class=mono>${d.host}</td><td>${d.band}</td><td>${d.port}</td><td class="dir ${d.direction}">${d.direction}</td><td><b>${d.param}</b></td><td>${esc(d.formatted)}</td></tr>`).join('')||'<tr><td colspan=7>no modem parameters recorded</td></tr>';
- $('paramspanel').innerHTML=`<h2>Modem parameters &mdash; sent host &rarr; modem</h2>
-  <table><thead><tr><th>UTC time</th><th>Host</th><th>Band</th><th>Port</th><th>Dir</th><th>Param</th><th>Value</th></tr></thead><tbody>${rows}</tbody></table>`;
+ const eff=r.effective||{columns:[],rows:[]}, hist=r.history||[];
+ const cols=eff.columns;
+ const ehead='<tr><th>Host</th><th>Band</th><th>Port</th>'+cols.map(c=>`<th>${c}</th>`).join('')+'</tr>';
+ const erows=eff.rows.map(row=>{
+   const cells=cols.map(c=>{const v=row.params[c];return v?`<td title="set ${v.time}">${esc(v.formatted)}</td>`:'<td class=mono>·</td>';}).join('');
+   return `<tr><td class=mono>${row.host}</td><td>${row.band}</td><td>${row.port}</td>${cells}</tr>`;
+ }).join('')||`<tr><td colspan=${cols.length+3}>no modem parameters seen yet</td></tr>`;
+ const hrows=hist.map(d=>`<tr><td class=mono>${d.time}</td><td class=mono>${d.host}</td><td>${d.band}</td><td>${d.port}</td><td class="dir ${d.direction}">${d.direction}</td><td><b>${d.param}</b></td><td>${esc(d.formatted)}</td></tr>`).join('')||'<tr><td colspan=7>no modem parameters recorded</td></tr>';
+ $('paramspanel').innerHTML=`<h2>Effective parameters &mdash; per host / port</h2>
+  <table><thead>${ehead}</thead><tbody>${erows}</tbody></table>
+  <h2>History &mdash; sent host &rarr; modem</h2>
+  <table><thead><tr><th>UTC time</th><th>Host</th><th>Band</th><th>Port</th><th>Dir</th><th>Param</th><th>Value</th></tr></thead><tbody>${hrows}</tbody></table>`;
 }
 function setView(v){
  view=(view===v&&v!=='live')?'live':v;
