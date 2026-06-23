@@ -48,7 +48,8 @@ def _slim(d):
     return {"time": d["ts_utc"], "from": d["from"], "to": d["to"],
             "via": d["via"], "band": d["band"], "host": d["host"],
             "dir": kisslib.dir_label(d["direction"]),
-            "type": d["type"], "len": d["len"], "info": d["info"],
+            "type": d["type"], "ns": d["ns"], "nr": d["nr"],
+            "len": d["len"], "info": d["info"],
             "frame_type": kisslib.native_frame_type(d["frame_type"]),
             # ACKMODE transmit timeline (TX frames carrying a receipt only)
             "queued_utc": d["queued_utc"], "tx_start_utc": d["tx_start_utc"],

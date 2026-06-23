@@ -311,7 +311,7 @@ def row_to_dict(host, r):
          "from": "", "to": "", "via": "", "type": "", "info": "",
          "tx_time_ms": tx_time_ms, "tx_duration_ms": tx_duration_ms,
          "queued_utc": None, "tx_start_utc": None, "tx_end_utc": None,
-         "channel_wait_ms": None}
+         "channel_wait_ms": None, "ns": None, "nr": None}
     # derived ACKMODE transmit timeline (frames carrying a receipt only):
     # the frame timestamp is the queue moment; ack is tx_time_ms later;
     # transmission starts airtime before the ack.
@@ -323,6 +323,8 @@ def row_to_dict(host, r):
             d["channel_wait_ms"] = round(tx_time_ms - tx_duration_ms, 1)
     dec = decode_frame(payload, frame_type)
     ctl = ax25_control(payload, frame_type)
+    if ctl:
+        d["ns"], d["nr"] = ctl["ns"], ctl["nr"]
     if dec:
         d["from"] = dec["from"]
         d["to"] = dec["to"]

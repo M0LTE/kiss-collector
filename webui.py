@@ -100,6 +100,9 @@ PAGE = r"""<!doctype html>
  .from{color:#6fd08c}.to{color:#f0a868}.via{color:#8a93a3}
  .dir.RX{color:#6fd08c}.dir.TX{color:#f0a868;font-weight:600}
  tbody tr{cursor:pointer}
+ td.rej{color:#ff8a8a;font-weight:700}
+ tr.sess td{background:#16242f}
+ tr.rejtarget td{background:#3c2230}
  tr.det td{white-space:normal;background:#0d0f14;color:#aab3c2;padding:6px 12px;word-break:break-all}
  tr.det div{margin:2px 0}
  #statspanel h2{font-size:14px;margin:14px 0 6px}#statspanel h3{font-size:12px;margin:0 0 4px;color:#9aa4b2}
@@ -136,7 +139,7 @@ PAGE = r"""<!doctype html>
 <div id="bar">loading...</div>
 <div id="wrap"><table id="t"><thead><tr>
  <th>UTC time</th><th>Wait (ms)</th><th>Airtime (ms)</th><th>Host</th><th>Band</th>
- <th>From</th><th>To</th><th>Via</th><th>Dir</th><th>Type</th><th>Len</th>
+ <th>From</th><th>To</th><th>Via</th><th>Dir</th><th>Type</th><th>N(S)</th><th>N(R)</th><th>Len</th>
 </tr></thead><tbody id="tb"></tbody></table></div>
 <div id="statspanel" style="display:none"></div>
 <div id="paramspanel" style="display:none"></div>
@@ -200,6 +203,14 @@ function row(d){
  }
  const dl=dirLabel(d.direction);
  const ti=typeLabel(d.type);
+ const axt=(d.type||'').split(' ')[0];
+ const isRej=(axt==='REJ'||axt==='SREJ');
+ const ns=d.ns!=null?d.ns:'';
+ const nr=d.nr!=null?(isRej?'↻'+d.nr:d.nr):'';
+ tr.dataset.session=d.band+'|'+[d.from||'?',d.to||'?'].sort().join('~');
+ tr.dataset.ax=axt;
+ if(d.ns!=null)tr.dataset.ns=d.ns;
+ if(d.nr!=null)tr.dataset.nr=d.nr;
  tr.innerHTML=`<td class=mono>${t}</td>
   <td class=mono title="${esc(txTitle)}">${wait}</td><td class=mono>${air}</td>
   <td class=mono>${d.host}</td><td>${d.band}</td>
@@ -207,7 +218,8 @@ function row(d){
   <td class="call" style="color:${callColor(d.to)}">${d.to||''}</td>
   <td class=via>${d.via||''}</td>
   <td class="dir ${dl}">${dl}</td>
-  <td title="${esc(ti.title)}">${esc(ti.text)}</td><td>${d.len}</td>`;
+  <td title="${esc(ti.title)}">${esc(ti.text)}</td>
+  <td class=mono>${ns}</td><td class="mono${isRej?' rej':''}">${nr}</td><td>${d.len}</td>`;
  tr.onclick=()=>toggleDetail(tr,d);
  return tr;
 }
@@ -215,7 +227,7 @@ function toggleDetail(tr,d){
  const nx=tr.nextSibling;
  if(nx&&nx.classList&&nx.classList.contains('det')){nx.remove();return;}
  const dr=document.createElement('tr');dr.className='det';
- dr.innerHTML=`<td colspan=11><div><b>info:</b> ${esc(d.info)||'<i>none</i>'}</div>
+ dr.innerHTML=`<td colspan=13><div><b>info:</b> ${esc(d.info)||'<i>none</i>'}</div>
   <div><b>kiss cmd:</b> ${d.frame_type} &nbsp; <b>port:</b> ${d.port}`+
   (d.tx_duration_ms!=null?` &nbsp; <b>airtime:</b> ${d.tx_duration_ms} ms`:'')+`</div>
   <div class=mono><b>hex:</b> ${d.hex}</div></td>`;
@@ -303,6 +315,21 @@ $('pexp').onclick=()=>{
  if($('pto').value)o.to_ts=toTs($('pto').value);
  location='/export.pcap?'+qs(o);
 };
+// hover a row: highlight its connected session (same band + callsign pair);
+// hovering a REJ/SREJ also flags the I-frame(s) it is asking to be resent.
+const tbEl=$('tb');
+function clearHL(){tbEl.querySelectorAll('.sess,.rejtarget').forEach(x=>x.classList.remove('sess','rejtarget'));}
+tbEl.addEventListener('mouseover',e=>{
+ const tr=e.target.closest('tr');
+ if(!tr||!tr.dataset.session)return;
+ clearHL();
+ const rows=tbEl.querySelectorAll('tr[data-session="'+tr.dataset.session+'"]');
+ rows.forEach(x=>x.classList.add('sess'));
+ if((tr.dataset.ax==='REJ'||tr.dataset.ax==='SREJ')&&tr.dataset.nr){
+   rows.forEach(x=>{if(x.dataset.ax==='I'&&x.dataset.ns===tr.dataset.nr)x.classList.add('rejtarget');});
+ }
+});
+tbEl.addEventListener('mouseout',clearHL);
 meta().then(reload);
 setInterval(poll,2000);
 </script></body></html>"""
