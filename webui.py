@@ -150,8 +150,38 @@ const qs=o=>Object.entries(o).filter(([,v])=>v).map(([k,v])=>k+'='+encodeURIComp
 const esc=s=>(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function callColor(c){
  if(!c) return '#8a93a3';
- let h=0; for(let i=0;i<c.length;i++) h=(h*31+c.charCodeAt(i))|0;
- return `hsl(${((h%360)+360)%360},62%,67%)`;
+ let h=2166136261;                              // FNV-1a: strong avalanche so
+ for(let i=0;i<c.length;i++){h^=c.charCodeAt(i);h=Math.imul(h,16777619);}
+ const u=h>>>0;                                 // ...one-char diffs separate well
+ return `hsl(${u%360},${55+(u>>>9)%25}%,${60+(u>>>17)%16}%)`;
+}
+const AXNAME={
+ I:['Data','I — Information frame: connected-mode data'],
+ UI:['Unproto','UI — Unnumbered Information: connectionless (beacons, APRS, NET/ROM)'],
+ RR:['Ack','RR — Receive Ready: acknowledges frames, ready for more'],
+ RNR:['Busy','RNR — Receive Not Ready: acknowledged but receiver busy'],
+ REJ:['Reject','REJ — Reject: requests go-back-N retransmission'],
+ SREJ:['Sel-reject','SREJ — Selective Reject: requests one specific frame'],
+ SABM:['Connect','SABM — connection request'],
+ SABME:['Connect(ext)','SABME — connection request, modulo-128'],
+ UA:['Accept','UA — Unnumbered Ack: connection accepted / disconnect confirmed'],
+ DISC:['Disconnect','DISC — disconnect request'],
+ DM:['Not-connected','DM — Disconnected Mode: not in a connection (rejects connected-mode frames)'],
+ FRMR:['Frame-error','FRMR — Frame Reject: unrecoverable protocol error'],
+ XID:['Negotiate','XID — Exchange Identification: link parameter negotiation'],
+ TEST:['Test','TEST frame'], U:['U','Unnumbered frame']};
+const PIDNAME={
+ '0xF0':['text','no layer-3 protocol (plain text / data)'],
+ '0xCF':['NET/ROM','NET/ROM network layer'], '0xCC':['IP','IPv4'],
+ '0xCD':['ARP','ARP'], '0xC3':['TEXNET','TEXNET datagram'],
+ '0xCA':['LQP','Link Quality Protocol'], '0x08':['frag','segmentation fragment']};
+function typeLabel(t){
+ if(!t) return {text:'',title:''};
+ const sp=t.split(' '), ax=sp[0], pid=sp[1];
+ const a=AXNAME[ax]||[ax,ax];
+ let text=a[0], title=a[1];
+ if(pid){const p=PIDNAME[pid]||[pid,'PID '+pid];text+=' · '+p[0];title+=' | PID '+pid+': '+p[1];}
+ return {text,title};
 }
 
 function dirLabel(x){return x==='fromModem'?'RX':x==='toModem'?'TX':x;}
@@ -160,12 +190,13 @@ function row(d){
  const t=new Date(d.ts_unix*1000).toISOString().replace('T',' ').replace('Z','').slice(0,19);
  const tx=d.tx_time_ms!=null?(d.tx_time_ms+' ms'):'';
  const dl=dirLabel(d.direction);
+ const ti=typeLabel(d.type);
  tr.innerHTML=`<td class=mono>${t}</td><td class=mono>${d.host}</td><td>${d.band}</td>
   <td class="call" style="color:${callColor(d.from)}">${d.from||'<span class=mono>?</span>'}</td>
   <td class="call" style="color:${callColor(d.to)}">${d.to||''}</td>
   <td class=via>${d.via||''}</td>
   <td class="dir ${dl}">${dl}</td>
-  <td>${d.type||''}</td><td>${d.len}</td>
+  <td title="${esc(ti.title)}">${esc(ti.text)}</td><td>${d.len}</td>
   <td class=mono title="${d.tx_duration_ms!=null?('airtime '+d.tx_duration_ms+' ms'):''}">${tx}</td>`;
  tr.onclick=()=>toggleDetail(tr,d);
  return tr;
