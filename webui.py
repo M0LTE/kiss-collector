@@ -189,8 +189,15 @@ function typeLabel(t){
 function dirLabel(x){return x==='fromModem'?'RX':x==='toModem'?'TX':x;}
 function row(d){
  const tr=document.createElement('tr');
- const t=new Date(d.ts_unix*1000).toISOString().replace('T',' ').replace('Z','').slice(0,19);
- const tx=d.tx_time_ms!=null?(d.tx_time_ms+' ms'):'';
+ const t=new Date(d.ts_unix*1000).toISOString().replace('T',' ').slice(0,23);
+ let tx='', txTitle='';
+ if(d.tx_time_ms!=null){
+   tx=d.tx_time_ms>=1000?(d.tx_time_ms/1000).toFixed(1)+' s':Math.round(d.tx_time_ms)+' ms';
+   const hms=u=>new Date(u*1000).toISOString().slice(11,23);
+   txTitle=`queued ${hms(d.ts_unix)} → acked ${hms(d.ts_unix+d.tx_time_ms/1000)} `
+     +`(${(d.tx_time_ms/1000).toFixed(1)} s queue→ack)`
+     +(d.tx_duration_ms!=null?`; this frame's airtime ${d.tx_duration_ms} ms`:'');
+ }
  const dl=dirLabel(d.direction);
  const ti=typeLabel(d.type);
  tr.innerHTML=`<td class=mono>${t}</td><td class=mono>${d.host}</td><td>${d.band}</td>
@@ -199,7 +206,7 @@ function row(d){
   <td class=via>${d.via||''}</td>
   <td class="dir ${dl}">${dl}</td>
   <td title="${esc(ti.title)}">${esc(ti.text)}</td><td>${d.len}</td>
-  <td class=mono title="${d.tx_duration_ms!=null?('airtime '+d.tx_duration_ms+' ms'):''}">${tx}</td>`;
+  <td class=mono title="${esc(txTitle)}">${tx}</td>`;
  tr.onclick=()=>toggleDetail(tr,d);
  return tr;
 }
