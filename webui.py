@@ -135,8 +135,8 @@ PAGE = r"""<!doctype html>
 </div>
 <div id="bar">loading...</div>
 <div id="wrap"><table id="t"><thead><tr>
- <th>UTC time</th><th>Host</th><th>Band</th><th>From</th><th>To</th><th>Via</th>
- <th>Dir</th><th>Type</th><th>Len</th><th>Queued</th><th>Tx start</th><th>Airtime</th>
+ <th>UTC time</th><th>Wait (ms)</th><th>Airtime (ms)</th><th>Host</th><th>Band</th>
+ <th>From</th><th>To</th><th>Via</th><th>Dir</th><th>Type</th><th>Len</th>
 </tr></thead><tbody id="tb"></tbody></table></div>
 <div id="statspanel" style="display:none"></div>
 <div id="paramspanel" style="display:none"></div>
@@ -190,25 +190,24 @@ function dirLabel(x){return x==='fromModem'?'RX':x==='toModem'?'TX':x;}
 function row(d){
  const tr=document.createElement('tr');
  const t=new Date(d.ts_unix*1000).toISOString().replace('T',' ').slice(0,23);
- let qd='', txStart='', air='', txTitle='';
+ let wait='', air='', txTitle='';
  if(d.tx_time_ms!=null){
    const hm=s=>s?s.slice(11,23):'';   // HH:MM:SS.mmm from ISO ...THH:MM:SS.mmmZ
-   const fmt=ms=>ms>=1000?(ms/1000).toFixed(2)+' s':Math.round(ms)+' ms';
-   qd=hm(d.queued_utc); txStart=hm(d.tx_start_utc);
-   if(d.tx_duration_ms!=null) air=fmt(d.tx_duration_ms);
-   txTitle=`queued ${qd} → on air ${txStart||'?'} → acked ${hm(d.tx_end_utc)}`
-     +` (${(d.tx_time_ms/1000).toFixed(1)} s queue→ack`
-     +(d.channel_wait_ms!=null?`, ${(d.channel_wait_ms/1000).toFixed(1)} s waiting for channel`:'')+')';
+   if(d.channel_wait_ms!=null) wait=Math.round(d.channel_wait_ms);
+   if(d.tx_duration_ms!=null) air=Math.round(d.tx_duration_ms);
+   txTitle=`queued ${hm(d.queued_utc)} → on air ${hm(d.tx_start_utc)||'?'} → acked ${hm(d.tx_end_utc)}`
+     +` (${(d.tx_time_ms/1000).toFixed(1)} s queue→ack)`;
  }
  const dl=dirLabel(d.direction);
  const ti=typeLabel(d.type);
- tr.innerHTML=`<td class=mono>${t}</td><td class=mono>${d.host}</td><td>${d.band}</td>
+ tr.innerHTML=`<td class=mono>${t}</td>
+  <td class=mono title="${esc(txTitle)}">${wait}</td><td class=mono>${air}</td>
+  <td class=mono>${d.host}</td><td>${d.band}</td>
   <td class="call" style="color:${callColor(d.from)}">${d.from||'<span class=mono>?</span>'}</td>
   <td class="call" style="color:${callColor(d.to)}">${d.to||''}</td>
   <td class=via>${d.via||''}</td>
   <td class="dir ${dl}">${dl}</td>
-  <td title="${esc(ti.title)}">${esc(ti.text)}</td><td>${d.len}</td>
-  <td class=mono>${qd}</td><td class=mono title="${esc(txTitle)}">${txStart}</td><td class=mono>${air}</td>`;
+  <td title="${esc(ti.title)}">${esc(ti.text)}</td><td>${d.len}</td>`;
  tr.onclick=()=>toggleDetail(tr,d);
  return tr;
 }
@@ -216,7 +215,7 @@ function toggleDetail(tr,d){
  const nx=tr.nextSibling;
  if(nx&&nx.classList&&nx.classList.contains('det')){nx.remove();return;}
  const dr=document.createElement('tr');dr.className='det';
- dr.innerHTML=`<td colspan=12><div><b>info:</b> ${esc(d.info)||'<i>none</i>'}</div>
+ dr.innerHTML=`<td colspan=11><div><b>info:</b> ${esc(d.info)||'<i>none</i>'}</div>
   <div><b>kiss cmd:</b> ${d.frame_type} &nbsp; <b>port:</b> ${d.port}`+
   (d.tx_duration_ms!=null?` &nbsp; <b>airtime:</b> ${d.tx_duration_ms} ms`:'')+`</div>
   <div class=mono><b>hex:</b> ${d.hex}</div></td>`;
