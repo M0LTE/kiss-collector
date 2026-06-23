@@ -151,6 +151,8 @@ const F=()=>({host:$('host').value,band:$('band').value,direction:$('direction')
  q:$('q').value.trim()});
 const qs=o=>Object.entries(o).filter(([,v])=>v).map(([k,v])=>k+'='+encodeURIComponent(v)).join('&');
 const esc=s=>(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// connected-mode frame types — only these form a "session" (UI/beacons don't)
+const CONN={I:1,RR:1,RNR:1,REJ:1,SREJ:1,SABM:1,SABME:1,UA:1,DISC:1,DM:1,FRMR:1,XID:1};
 function callColor(c){
  if(!c) return '#8a93a3';
  let h=2166136261;                              // FNV-1a: strong avalanche so
@@ -207,8 +209,8 @@ function row(d){
  const isRej=(axt==='REJ'||axt==='SREJ');
  const ns=d.ns!=null?d.ns:'';
  const nr=d.nr!=null?(isRej?'↻'+d.nr:d.nr):'';
- tr.dataset.session=d.band+'|'+[d.from||'?',d.to||'?'].sort().join('~');
  tr.dataset.ax=axt;
+ if(CONN[axt])tr.dataset.session=d.band+'|'+[d.from||'?',d.to||'?'].sort().join('~');
  if(d.ns!=null)tr.dataset.ns=d.ns;
  if(d.nr!=null)tr.dataset.nr=d.nr;
  tr.innerHTML=`<td class=mono>${t}</td>
