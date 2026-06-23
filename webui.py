@@ -169,7 +169,9 @@ const AXNAME={
  DM:['Not-connected','DM — Disconnected Mode: not in a connection (rejects connected-mode frames)'],
  FRMR:['Frame-error','FRMR — Frame Reject: unrecoverable protocol error'],
  XID:['Negotiate','XID — Exchange Identification: link parameter negotiation'],
- TEST:['Test','TEST frame'], U:['U','Unnumbered frame']};
+ TEST:['Test','TEST frame'],
+ U:['Unnumbered','U — unnumbered frame (unrecognised subtype)'],
+ S:['Supervisory','S — supervisory frame (unrecognised subtype)']};
 const PIDNAME={
  '0xF0':['text','no layer-3 protocol (plain text / data)'],
  '0xCF':['NET/ROM','NET/ROM network layer'], '0xCC':['IP','IPv4'],

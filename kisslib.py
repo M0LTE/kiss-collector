@@ -304,14 +304,16 @@ def row_to_dict(host, r):
          "from": "", "to": "", "via": "", "type": "", "info": "",
          "tx_time_ms": tx_time_ms, "tx_duration_ms": tx_duration_ms}
     dec = decode_frame(payload, frame_type)
+    ctl = ax25_control(payload, frame_type)
     if dec:
         d["from"] = dec["from"]
         d["to"] = dec["to"]
         d["via"] = " ".join(dec.get("via", []))
-        d["type"] = dec.get("type", "")
+        d["info"] = printable(dec.get("info", ""))
+        # precise AX.25 subtype (RR/SABM/UA/DISC/XID/...), not the coarse class
+        d["type"] = ctl["ax_type"] if ctl else dec.get("type", "")
         if dec.get("pid"):
             d["type"] += " " + dec["pid"]
-        d["info"] = printable(dec.get("info", ""))
     d["is_ack"] = ("AckMode" in (frame_type or "")) and not good(dec)
     return d
 
